@@ -1,0 +1,19 @@
+{
+  "name": "pos-fiscal-broker-thermal",
+  "version": "1.0.0",
+  "description": "Aplikacja pośrednicząca do komunikacji z drukarką fiskalną Posnet Thermal.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.19.2",
+    "serialport": "^12.0.0"
+  },
+  "devDependencies": {
+    "electron": "^31.0.2"
+  }
+}

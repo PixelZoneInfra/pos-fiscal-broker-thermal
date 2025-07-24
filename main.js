@@ -1,0 +1,106 @@
+const { app, BrowserWindow } = require('electron');
+const express = require('express');
+const path = require('path');
+const printer = require('./thermal-printer');
+
+const API_PORT = 3030;
+
+function createWindow() {
+  const mainWindow = new BrowserWindow({ width: 800, height: 600 });
+  mainWindow.loadFile('index.html');
+}
+
+const apiApp = express();
+apiApp.use(express.json());
+
+// --- ENDPOINTY API ---
+
+// === Operacje Kasjera ===
+apiApp.post('/cashier/login', async (req, res) => {
+  try {
+    const { cashier = 'Kasjer 1', register = 'Kasa 1' } = req.body;
+    await printer.login(cashier, register);
+    res.status(200).json({ success: true, message: `Kasjer '${cashier}' zalogowany.` });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Błąd logowania kasjera.', error: error.message });
+  }
+});
+
+apiApp.post('/cashier/logout', async (req, res) => {
+  try {
+    const { cashier = 'Kasjer 1', register = 'Kasa 1' } = req.body;
+    await printer.logout(cashier, register);
+    res.status(200).json({ success: true, message: `Kasjer '${cashier}' wylogowany.` });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Błąd wylogowania kasjera.', error: error.message });
+  }
+});
+
+// === Operacje Gotówkowe ===
+apiApp.post('/cash/deposit', async (req, res) => {
+  try {
+    const { amount } = req.body;
+    if (!amount || isNaN(parseFloat(amount))) {
+        return res.status(400).json({ success: false, message: 'Nieprawidłowa lub brakująca kwota.' });
+    }
+    await printer.cashDeposit(amount);
+    res.status(200).json({ success: true, message: `Wpłacono ${amount} do kasy.` });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Błąd wpłaty do kasy.', error: error.message });
+  }
+});
+
+apiApp.post('/cash/withdraw', async (req, res) => {
+    try {
+        const { amount } = req.body;
+        if (!amount || isNaN(parseFloat(amount))) {
+            return res.status(400).json({ success: false, message: 'Nieprawidłowa lub brakująca kwota.' });
+        }
+        await printer.cashWithdrawal(amount);
+        res.status(200).json({ success: true, message: `Wypłacono ${amount} z kasy.` });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Błąd wypłaty z kasy.', error: error.message });
+    }
+});
+
+apiApp.get('/cash/report', async (req, res) => {
+    try {
+        await printer.getCashDrawerStateReport();
+        res.status(200).json({ success: true, message: 'Polecenie wydruku raportu stanu kasy wysłane.' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Błąd drukowania raportu.', error: error.message });
+    }
+});
+
+// === Operacje na Paragonie ===
+apiApp.post('/transaction/void', async (req, res) => {
+    try {
+        await printer.printVoidedReceipt();
+        res.status(200).json({ success: true, message: 'Polecenie anulowania transakcji wysłane.' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Błąd anulowania transakcji.', error: error.message });
+    }
+});
+
+
+// === Odczyt statusu ===
+apiApp.get('/status', async (req, res) => {
+    try {
+      const statusData = await printer.getStatusInfo();
+      res.status(200).json({ success: true, message: 'Odczytano status drukarki.', data: statusData });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Błąd odczytu statusu.', error: error.message });
+    }
+});
+
+
+app.whenReady().then(() => {
+  createWindow();
+  apiApp.listen(API_PORT, () => {
+    console.log(`🚀 Serwer API nasłuchuje na http://localhost:${API_PORT}`);
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
