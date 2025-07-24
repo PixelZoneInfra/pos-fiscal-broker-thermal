@@ -15,7 +15,20 @@ apiApp.use(express.json());
 
 // --- ENDPOINTY API ---
 
-// === Operacje Kasjera ===
+apiApp.post('/transaction/receipt', async (req, res) => {
+    try {
+        const receiptData = req.body;
+        if (!receiptData.items || !receiptData.payment) {
+            return res.status(400).json({ success: false, message: 'Nieprawidłowe dane paragonu.' });
+        }
+        const result = await printer.printReceipt(receiptData);
+        res.status(200).json(result);
+    } catch (error) {
+        console.error('Błąd podczas drukowania paragonu:', error.message);
+        res.status(500).json({ success: false, message: 'Błąd drukowania paragonu.', error: error.message });
+    }
+});
+
 apiApp.post('/cashier/login', async (req, res) => {
   try {
     const { cashier = 'Kasjer 1', register = 'Kasa 1' } = req.body;
@@ -36,7 +49,6 @@ apiApp.post('/cashier/logout', async (req, res) => {
   }
 });
 
-// === Operacje Gotówkowe ===
 apiApp.post('/cash/deposit', async (req, res) => {
   try {
     const { amount } = req.body;
@@ -72,7 +84,6 @@ apiApp.get('/cash/report', async (req, res) => {
     }
 });
 
-// === Operacje na Paragonie ===
 apiApp.post('/transaction/void', async (req, res) => {
     try {
         await printer.printVoidedReceipt();
@@ -82,8 +93,6 @@ apiApp.post('/transaction/void', async (req, res) => {
     }
 });
 
-
-// === Odczyt statusu ===
 apiApp.get('/status', async (req, res) => {
     try {
       const statusData = await printer.getStatusInfo();
@@ -93,11 +102,31 @@ apiApp.get('/status', async (req, res) => {
     }
 });
 
+// Endpoint do testowania błędu (do usunięcia po testach)
+apiApp.post('/test/break-printer', async (req, res) => {
+    console.log('--- Rozpoczynanie symulacji błędu ---');
+    try {
+        await printer.startTransaction();
+        res.status(200).json({ success: true, message: 'Symulacja błędu zakończona. Drukarka jest teraz w stanie otwartej transakcji.' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Błąd podczas symulacji.', error: error.message });
+    }
+});
 
+
+// === Inicjalizacja Aplikacji ===
 app.whenReady().then(() => {
   createWindow();
+
+  // NIE wywołujemy już żadnej specjalnej konfiguracji.
+  // Po prostu uruchamiamy serwer API.
+  // Logika otwierania portu jest teraz w całości w thermal-printer.js.
   apiApp.listen(API_PORT, () => {
     console.log(`🚀 Serwer API nasłuchuje na http://localhost:${API_PORT}`);
+  });
+  
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 

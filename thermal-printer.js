@@ -6,11 +6,13 @@ const port = new SerialPort({
   dataBits: 8,
   stopBits: 1,
   parity: 'none',
-  autoOpen: false,
+  autoOpen: false, 
 });
 
 const commandQueue = [];
 let isProcessing = false;
+
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 port.open((err) => {
   if (err) return console.error('❌ Błąd otwierania portu COM3:', err.message);
@@ -22,11 +24,6 @@ port.on('error', (err) => {
   console.error('❌ Błąd portu szeregowego:', err.message);
 });
 
-/**
- * Oblicza sumę kontrolną (checksum) dla polecenia zgodnie z dokumentacją (XOR).
- * @param {Buffer} commandPart Bufor zawierający część polecenia od znaku po 'ESC P' do końca.
- * @returns {string} Dwuznakowy string HEX reprezentujący sumę kontrolną.
- */
 function calculateChecksum(commandPart) {
   let check = 255;
   for (let i = 0; i < commandPart.length; i++) {
@@ -36,18 +33,24 @@ function calculateChecksum(commandPart) {
 }
 
 async function processQueue() {
-  if (isProcessing || commandQueue.length === 0) return;
-  isProcessing = true;
-  const task = commandQueue.shift();
-  try {
-    const response = await executeCommand(task.command, task.expectsResponse);
-    task.resolve(response);
-  } catch (error) {
-    task.reject(error);
-  } finally {
-    isProcessing = false;
-    processQueue();
-  }
+    if (isProcessing || commandQueue.length === 0) return;
+    isProcessing = true;
+    const task = commandQueue.shift();
+    try {
+        if (task.type === 'delay') {
+            await delay(task.duration);
+            task.resolve();
+        } else {
+            const response = await executeCommand(task.command, task.expectsResponse);
+            task.resolve(response);
+        }
+    } catch (error) {
+        // Teraz to zadziała, bo każdy task ma .reject
+        task.reject(error);
+    } finally {
+        isProcessing = false;
+        processQueue();
+    }
 }
 
 function executeCommand(command, expectsResponse) {
@@ -55,14 +58,13 @@ function executeCommand(command, expectsResponse) {
     const timeout = setTimeout(() => {
         port.removeListener('data', onData);
         reject(new Error('Timeout: Drukarka nie odpowiedziała.'));
-    }, 3000); // Wydłużony timeout dla operacji z wydrukiem
+    }, 5000);
 
     const onData = (chunk) => {
-        // Na razie prosta obsługa - pierwsza paczka danych to odpowiedź
         clearTimeout(timeout);
         port.removeListener('data', onData);
         console.log(`Otrzymano odpowiedź (hex): ${chunk.toString('hex')}`);
-        resolve('Drukarka odpowiedziała.'); // Można tu będzie zaimplementować pełne parsowanie
+        resolve('Drukarka odpowiedziała.');
     };
     
     if (expectsResponse) {
@@ -86,120 +88,119 @@ function executeCommand(command, expectsResponse) {
 
 function sendCommand(command, { expectsResponse = false } = {}) {
   return new Promise((resolve, reject) => {
-    commandQueue.push({ command, expectsResponse, resolve, reject });
+    commandQueue.push({ type: 'command', command, expectsResponse, resolve, reject });
     if (!isProcessing) processQueue();
   });
 }
 
-// === NOWE FUNKCJE ===
+// POPRAWKA: Teraz dodajemy też `reject`
+function addDelayToQueue(duration) {
+    return new Promise((resolve, reject) => {
+        commandQueue.push({ type: 'delay', duration, resolve, reject });
+        if (!isProcessing) processQueue();
+    });
+}
 
-/**
- * Logowanie kasjera.
- * Komenda: [th_login]
- */
+async function clearState() {
+    console.log('Wysyłanie polecenia [th_trcancel] w celu anulowania otwartej transakcji...');
+    const part = Buffer.from('0$e', 'binary');
+    const checksum = calculateChecksum(part);
+    const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
+    await sendCommand(command, { expectsResponse: false });
+    console.log('Oczekiwanie 500ms po anulowaniu...');
+    await addDelayToQueue(500);
+}
+
+async function startTransaction() {
+    const part = Buffer.from('0$h', 'binary');
+    const checksum = calculateChecksum(part);
+    const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
+    return sendCommand(command);
+}
+
+async function addReceiptLine(item, lineNumber) {
+    const { name, quantity, vatRate, unitPrice } = item;
+    const lineTotal = (quantity * unitPrice).toFixed(2);
+    const part = Buffer.from(`${lineNumber}$l${name}\r${quantity}\r${vatRate}/${unitPrice}/${lineTotal}/`, 'binary');
+    const checksum = calculateChecksum(part);
+    const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
+    return sendCommand(command);
+}
+
+async function endTransaction({ amountPaid, total }) {
+    const part = Buffer.from(`1;0$e001\r${amountPaid}/${total}/`, 'binary');
+    const checksum = calculateChecksum(part);
+    const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
+    return sendCommand(command);
+}
+
+async function printReceipt({ items, payment }) {
+    console.log('--- Rozpoczynanie drukowania paragonu ---');
+    await clearState();
+    await startTransaction();
+    console.log('Krok 2/4: Transakcja rozpoczęta.');
+    let calculatedTotal = 0;
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const lineNumber = i + 1;
+        calculatedTotal += item.quantity * item.unitPrice;
+        await addReceiptLine(item, lineNumber);
+        console.log(`Krok 3/4: Dodano pozycję #${lineNumber}: ${item.name}`);
+    }
+    const total = calculatedTotal.toFixed(2);
+    await endTransaction({ amountPaid: payment.amountPaid, total });
+    console.log('Krok 4/4: Transakcja zakończona.');
+    return { success: true, message: 'Paragon wysłany do drukarki.', total };
+}
+
 async function login(cashier, cashRegister) {
     const part = Buffer.from(`0#p${cashier}\r${cashRegister}\r`, 'binary');
     const checksum = calculateChecksum(part);
-    const command = Buffer.concat([
-        Buffer.from('\x1b\x50', 'binary'), // ESC P
-        part,
-        Buffer.from(checksum, 'binary'),
-        Buffer.from('\x1b\\', 'binary')   // ESC \
-    ]);
+    const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
     return sendCommand(command);
 }
 
-/**
- * Wylogowanie kasjera.
- * Komenda: [th_logout]
- */
 async function logout(cashier, cashRegister) {
     const part = Buffer.from(`0#q${cashier}\r${cashRegister}\r`, 'binary');
     const checksum = calculateChecksum(part);
-    const command = Buffer.concat([
-        Buffer.from('\x1b\x50', 'binary'),
-        part,
-        Buffer.from(checksum, 'binary'),
-        Buffer.from('\x1b\\', 'binary')
-    ]);
+    const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
     return sendCommand(command);
 }
 
-/**
- * Wpłata gotówki do kasy (depozyt).
- * Komenda: [th_cashinc]
- */
 async function cashDeposit(amount) {
     const part = Buffer.from(`0#i${amount}/`, 'binary');
     const checksum = calculateChecksum(part);
-    const command = Buffer.concat([
-        Buffer.from('\x1b\x50', 'binary'),
-        part,
-        Buffer.from(checksum, 'binary'),
-        Buffer.from('\x1b\\', 'binary')
-    ]);
+    const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
     return sendCommand(command);
 }
 
-/**
- * Wypłata gotówki z kasy.
- * Komenda: [th_cashdec]
- */
 async function cashWithdrawal(amount) {
     const part = Buffer.from(`0#d${amount}/`, 'binary');
     const checksum = calculateChecksum(part);
-    const command = Buffer.concat([
-        Buffer.from('\x1b\x50', 'binary'),
-        part,
-        Buffer.from(checksum, 'binary'),
-        Buffer.from('\x1b\\', 'binary')
-    ]);
+    const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
     return sendCommand(command);
 }
 
-/**
- * Drukuje niefiskalny raport o stanie kasy.
- * Komenda: [th_cashstaterep]
- */
 async function getCashDrawerStateReport() {
     const part = Buffer.from('0#t', 'binary');
     const checksum = calculateChecksum(part);
-    const command = Buffer.concat([
-        Buffer.from('\x1b\x50', 'binary'),
-        part,
-        Buffer.from(checksum, 'binary'),
-        Buffer.from('\x1b\\', 'binary')
-    ]);
+    const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
     return sendCommand(command);
 }
 
-/**
- * Anulowanie transakcji (wydruk paragonu "ANULOWANY").
- * Komenda: [th_trcancel]
- */
 async function printVoidedReceipt() {
-    // Uwaga: Ta komenda zadziała poprawnie tylko, jeśli wcześniej rozpoczniemy transakcję [th_trinit].
-    // Na razie implementujemy samo wysłanie polecenia anulowania.
     const part = Buffer.from('0$e', 'binary');
     const checksum = calculateChecksum(part);
-    const command = Buffer.concat([
-        Buffer.from('\x1b\x50', 'binary'),
-        part,
-        Buffer.from(checksum, 'binary'),
-        Buffer.from('\x1b\\', 'binary')
-    ]);
+    const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
     return sendCommand(command);
 }
 
-
-/**
- * Odczytuje status z drukarki (zostaje bez zmian).
- * Komenda: [th_scinfo]
- */
 async function getStatusInfo() {
     const command = Buffer.from([0x1b, 0x50, 0x23, 0x73, 0x1b, 0x5c]);
     return sendCommand(command, { expectsResponse: true });
 }
+
+
 
 module.exports = {
   login,
@@ -209,4 +210,7 @@ module.exports = {
   getCashDrawerStateReport,
   printVoidedReceipt,
   getStatusInfo,
+  printReceipt,
+  clearState,
+  startTransaction // Do testów
 };

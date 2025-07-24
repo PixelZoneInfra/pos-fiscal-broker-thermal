@@ -1,16 +1,29 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>POS Fiscal Broker - Thermal</title>
-</head>
-<body>
-    <h1>Aplikacja Pośrednicząca Działa</h1>
-    <p>Serwer API nasłuchuje w tle na porcie 3030.</p>
-    <p>Możesz teraz wysyłać żądania z Twojej głównej aplikacji POS na adresy:</p>
-    <ul>
-        <li><b>GET</b> http://localhost:3030/rtc</li>
-        <li><b>GET</b> http://localhost:3030/status</li>
-    </ul>
+<ul>
+        <li><b>POST</b> /transaction/receipt (body: Zobacz przykład poniżej)</li>
+        <li><b>POST</b> /cashier/login (body: <code>{"cashier": "Jan Kowalski", "register": "St. 1"}</code>)</li>
+        </ul>
+    <hr>
+    <h3>Przykład body dla paragonu (/transaction/receipt):</h3>
+    <pre><code>
+{
+  "items": [
+    {
+      "name": "Chleb",
+      "quantity": 1,
+      "vatRate": "A",
+      "unitPrice": 4.50
+    },
+    {
+      "name": "Mleko 2%",
+      "quantity": 2,
+      "vatRate": "B",
+      "unitPrice": 3.20
+    }
+  ],
+  "payment": {
+    "amountPaid": 20.00
+  }
+}
+    </code></pre>
 </body>
 </html>
