@@ -100,6 +100,40 @@ apiApp.post('/transaction/void', async (req, res) => {
     }
 });
 
+// === NOWY ENDPOINT DO PONOWNEGO WYDRUKU ===
+apiApp.post('/transaction/reprint-last', async (req, res) => {
+    try {
+        await printer.reprintLastReceipt();
+        res.status(200).json({ success: true, message: 'Polecenie ponownego wydruku wysłane.' });
+    } catch (error) {
+        console.error('Błąd podczas ponownego drukowania paragonu:', error.message);
+        res.status(500).json({ success: false, message: 'Błąd ponownego drukowania paragonu.', error: error.message });
+    }
+});
+
+// === NOWY ENDPOINT DO ODCZYTU STANU KASY ===
+apiApp.get('/cash/state', async (req, res) => {
+    try {
+        const cashAmount = await printer.getCashDrawerState();
+        res.status(200).json({ success: true, cashAmount: cashAmount });
+    } catch (error) {
+        console.error('Błąd podczas odczytu stanu kasy:', error.message);
+        res.status(500).json({ success: false, message: 'Błąd odczytu stanu kasy.', error: error.message });
+    }
+});
+
+// === NOWY ENDPOINT Z PARSOWANIEM ===
+apiApp.get('/status/parsed', async (req, res) => {
+    try {
+        const parsedStatus = await printer.getParsedStatusInfo();
+        res.status(200).json({ success: true, status: parsedStatus });
+    } catch (error) {
+        console.error('Błąd podczas odczytu parsowanego statusu:', error.message);
+        res.status(500).json({ success: false, message: 'Błąd odczytu i parsowania statusu.', error: error.message });
+    }
+});
+
+
 apiApp.get('/status', async (req, res) => {
     try {
       const statusData = await printer.getStatusInfo();

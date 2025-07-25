@@ -55,41 +55,49 @@ async function processQueue() {
 
 function executeCommand(command, expectsResponse) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
+    // Ta funkcja jest wywoływana tylko dla poleceń, które OCZEKUJĄ odpowiedzi
+    const onData = (chunk) => {
+        port.removeListener('data', onData);
+        clearTimeout(timeoutId);
+        console.log(`Otrzymano odpowiedź (hex): ${chunk.toString('hex')}`);
+        // === KLUCZOWA POPRAWKA TUTAJ ===
+        // Zwracamy faktyczne dane, a nie ogólny komunikat
+        resolve(chunk.toString('binary')); 
+    };
+
+    const timeoutId = setTimeout(() => {
         port.removeListener('data', onData);
         reject(new Error('Timeout: Drukarka nie odpowiedziała.'));
     }, 5000);
 
-    const onData = (chunk) => {
-        clearTimeout(timeout);
-        port.removeListener('data', onData);
-        console.log(`Otrzymano odpowiedź (hex): ${chunk.toString('hex')}`);
-        resolve('Drukarka odpowiedziała.');
-    };
+    port.on('data', onData);
     
-    if (expectsResponse) {
-        port.on('data', onData);
-    }
-
     port.write(command, (err) => {
       if (err) {
-        clearTimeout(timeout);
         port.removeListener('data', onData);
+        clearTimeout(timeoutId);
         return reject(new Error(`Błąd zapisu do portu: ${err.message}`));
       }
       console.log('Wysłano polecenie (hex):', command.toString('hex'));
-      if (!expectsResponse) {
-        clearTimeout(timeout);
-        resolve('Polecenie wysłane pomyślnie.');
-      }
     });
   });
 }
 
+// Uproszczona funkcja do wysyłania - teraz wszystkie polecenia przechodzą przez kolejkę
 function sendCommand(command, { expectsResponse = false } = {}) {
-  return new Promise((resolve, reject) => {
-    commandQueue.push({ type: 'command', command, expectsResponse, resolve, reject });
-    if (!isProcessing) processQueue();
+  return new Promise(async (resolve, reject) => {
+      // Dla poleceń bez odpowiedzi, po prostu wysyłamy i kończymy
+      if (!expectsResponse) {
+          port.write(command, (err) => {
+              if (err) return reject(new Error(`Błąd zapisu do portu: ${err.message}`));
+              console.log('Wysłano polecenie (hex):', command.toString('hex'));
+              resolve('Polecenie wysłane pomyślnie.');
+          });
+      } else {
+          // Dla poleceń z odpowiedzią, używamy kolejki
+          commandQueue.push({ command, expectsResponse, resolve, reject });
+          if (!isProcessing) processQueue();
+      }
   });
 }
 
@@ -265,7 +273,138 @@ async function voidCurrentTransaction() {
     return sendCommand(command, { expectsResponse: false });
 }
 
+/**
+ * Drukuje niefiskalną kopię ostatniego sfinalizowanego paragonu.
+ * Komenda: [th_nfbill]
+ */
+async function reprintLastReceipt() {
+    console.log('Wysyłanie polecenia ponownego wydruku ostatniego paragonu...');
+    const part = Buffer.from('1#H', 'binary');
+    const checksum = calculateChecksum(part);
+    const command = Buffer.concat([
+        Buffer.from('\x1b\x50', 'binary'),
+        part,
+        Buffer.from(checksum, 'binary'),
+        Buffer.from('\x1b\\', 'binary')
+    ]);
+    return sendCommand(command, { expectsResponse: false });
+}
 
+/**
+ * POPRAWIONA WERSJA: Odczytuje informacje kasowe i parsuje z nich aktualny stan gotówki w kasie.
+ * Komenda: [th_scinfo]
+ * @returns {Promise<number>} Zwraca stan kasy jako liczba.
+ */
+async function getCashDrawerState() {
+    console.log('Wysyłanie polecenia odczytu informacji kasowych...');
+    const command = Buffer.from([0x1b, 0x50, 0x23, 0x73, 0x1b, 0x5c]);
+    const rawResponse = await sendCommand(command, { expectsResponse: true });
+
+    try {
+        // Nowa, bezpieczna metoda parsowania
+        const parts = rawResponse.split('/');
+        if (parts.length < 3) { // Muszą być co najmniej 3 części: ... / CASH / num_id
+            throw new Error('Odpowiedź ma nieoczekiwaną strukturę (za mało części).');
+        }
+        
+        // Pole CASH jest zawsze przedostatnie
+        const cashValueString = parts[parts.length - 2].trim();
+        const cashValue = parseFloat(cashValueString);
+
+        if (isNaN(cashValue)) {
+            throw new Error(`Nie udało się sparsować wartości gotówki. Otrzymano: "${cashValueString}"`);
+        }
+        
+        console.log(`Odczytano stan kasy: ${cashValue}`);
+        return cashValue;
+    } catch (error) {
+        console.error('Błąd parsowania odpowiedzi [th_scinfo]:', error);
+        console.error('Surowa odpowiedź, która spowodowała błąd:', rawResponse);
+        throw new Error('Otrzymano nieprawidłowy format odpowiedzi od drukarki.');
+    }
+}
+
+
+/**
+ * POPRAWIONA WERSJA: Odczytuje i PARSUJE informacje kasowe do czytelnego obiektu JSON.
+ * Komenda: [th_scinfo]
+ * @returns {Promise<object>} Zwraca obiekt z rozkodowanym statusem drukarki.
+ */
+async function getParsedStatusInfo() {
+    console.log('Wysyłanie polecenia odczytu i parsowania informacji kasowych...');
+    const command = Buffer.from([0x1b, 0x50, 0x23, 0x73, 0x1b, 0x5c]);
+    const rawResponse = await sendCommand(command, { expectsResponse: true });
+
+    try {
+        const cleanResponse = rawResponse.replace(/^.*?#X/, '').replace(/\x1b\\$/, '');
+        const parts = cleanResponse.split('/');
+        
+        if (parts.length < 4) {
+            throw new Error('Odpowiedź ma nieoczekiwaną strukturę.');
+        }
+
+        const flags = parts[0].split(';');
+        
+        // Dynamiczne znajdowanie granicy między stawkami a licznikiem paragonów
+        let ratesEndIndex = 1;
+        while (parts[ratesEndIndex] && parts[ratesEndIndex].includes('.')) {
+            ratesEndIndex++;
+        }
+
+        const vatRatesRaw = parts.slice(1, ratesEndIndex);
+        const receiptCounter = parseInt(parts[ratesEndIndex], 10);
+        
+        const totalsAndRest = parts.slice(ratesEndIndex + 1);
+        const uniqueId = totalsAndRest.pop();
+        const cashInDrawer = parseFloat(totalsAndRest.pop());
+        const dailyTotalsRaw = totalsAndRest;
+
+        const parseRate = (rateStr) => {
+            if (!rateStr) return 'niezdefiniowana';
+            const val = parseFloat(rateStr);
+            if (val === 100) return "zwolniona";
+            if (val === 101) return "nieaktywna";
+            return val;
+        };
+
+        const statusObject = {
+            lastCommandError: parseInt(flags[0], 10),
+            isFiscal: parseInt(flags[1], 10) === 1,
+            isTransactionOpen: parseInt(flags[2], 10) === 1,
+            lastTransactionOk: parseInt(flags[3], 10) === 1,
+            ramResets: parseInt(flags[7], 10),
+            lastWriteDate: `20${flags[8]}-${flags[9]}-${flags[10]}`,
+            vatRates: {
+                A: parseRate(vatRatesRaw[0]),
+                B: parseRate(vatRatesRaw[1]),
+                C: parseRate(vatRatesRaw[2]),
+                D: parseRate(vatRatesRaw[3]),
+                E: parseRate(vatRatesRaw[4]),
+                F: parseRate(vatRatesRaw[5]),
+                G: parseRate(vatRatesRaw[6]),
+            },
+            receiptsSinceDailyReport: receiptCounter,
+            dailyTotals: {
+                A: parseFloat(dailyTotalsRaw[0]) || 0,
+                B: parseFloat(dailyTotalsRaw[1]) || 0,
+                C: parseFloat(dailyTotalsRaw[2]) || 0,
+                D: parseFloat(dailyTotalsRaw[3]) || 0,
+                E: parseFloat(dailyTotalsRaw[4]) || 0,
+                F: parseFloat(dailyTotalsRaw[5]) || 0,
+                G: parseFloat(dailyTotalsRaw[6]) || 0,
+            },
+            cashInDrawer: cashInDrawer,
+            uniqueId: uniqueId,
+        };
+
+        return statusObject;
+
+    } catch (error) {
+        console.error('Błąd parsowania odpowiedzi [th_scinfo]:', error);
+        console.error('Surowa odpowiedź, która spowodowała błąd:', rawResponse);
+        throw new Error('Otrzymano nieprawidłowy format odpowiedzi od drukarki.');
+    }
+}
 
 async function login(cashier, cashRegister) {
     const part = Buffer.from(`0#p${cashier}\r${cashRegister}\r`, 'binary');
@@ -330,5 +469,8 @@ module.exports = {
   printDailyReport,
   printPeriodicReport,
   voidCurrentTransaction,
-  printTestVoidReceipt
+  printTestVoidReceipt,
+  reprintLastReceipt,
+  getCashDrawerState,
+  getParsedStatusInfo
 };
