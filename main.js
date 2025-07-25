@@ -84,11 +84,18 @@ apiApp.get('/cash/report', async (req, res) => {
     }
 });
 
+// Zmieniamy logikę /transaction/void, aby była kompletna i niezależna
 apiApp.post('/transaction/void', async (req, res) => {
     try {
-        await printer.printVoidedReceipt();
-        res.status(200).json({ success: true, message: 'Polecenie anulowania transakcji wysłane.' });
+        // Kompletny i bezpieczny proces: wyczyść, rozpocznij, anuluj.
+        // Gwarantuje wydruk paragonu "ANULOWANY" nawet jeśli drukarka była w czystym stanie.
+        console.log('--- Rozpoczynanie procedury drukowania paragonu ANULOWANEGO ---');
+        await printer.clearState();
+        await printer.startTransaction();
+        await printer.voidCurrentTransaction();
+        res.status(200).json({ success: true, message: 'Polecenie wydruku paragonu ANULOWANEGO wysłane.' });
     } catch (error) {
+        console.error('Błąd podczas anulowania transakcji:', error.message);
         res.status(500).json({ success: false, message: 'Błąd anulowania transakcji.', error: error.message });
     }
 });
@@ -122,6 +129,35 @@ apiApp.post('/reports/daily', async (req, res) => {
     } catch (error) {
         console.error('Błąd podczas drukowania raportu dobowego:', error.message);
         res.status(500).json({ success: false, message: 'Błąd drukowania raportu dobowego.', error: error.message });
+    }
+});
+
+apiApp.post('/reports/periodic', async (req, res) => {
+    try {
+        const { startDate, endDate, cashier, cashRegister } = req.body;
+        if (!startDate || !endDate) {
+            return res.status(400).json({ success: false, message: 'Brak daty początkowej lub końcowej.' });
+        }
+        await printer.printPeriodicReport({ startDate, endDate, cashier, cashRegister });
+        res.status(200).json({ success: true, message: 'Polecenie wydruku raportu okresowego wysłane.' });
+    } catch (error) {
+        console.error('Błąd podczas drukowania raportu okresowego:', error.message);
+        res.status(500).json({ success: false, message: 'Błąd drukowania raportu okresowego.', error: error.message });
+    }
+});
+
+// === ENDPOINTY TESTOWE ===
+apiApp.post('/test/void-receipt', async (req, res) => {
+    try {
+        const receiptData = req.body;
+        if (!receiptData.items) {
+            return res.status(400).json({ success: false, message: 'Nieprawidłowe dane paragonu testowego.' });
+        }
+        const result = await printer.printTestVoidReceipt(receiptData);
+        res.status(200).json(result);
+    } catch (error) {
+        console.error('Błąd podczas drukowania paragonu testowego:', error.message);
+        res.status(500).json({ success: false, message: 'Błąd drukowania paragonu testowego.', error: error.message });
     }
 });
 

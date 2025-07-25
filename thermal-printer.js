@@ -154,6 +154,32 @@ async function printReceipt({ items, payment }) {
 }
 
 /**
+ * Drukuje pełny paragon testowy, który na końcu zawsze jest ANULOWANY.
+ * Idealne do testowania logiki POS bez konsekwencji fiskalnych.
+ */
+async function printTestVoidReceipt({ items }) {
+    console.log('--- Rozpoczynanie drukowania paragonu testowego (anulowanego) ---');
+    
+    await clearState();
+    await startTransaction();
+    console.log('Krok 1/3 (Test): Transakcja rozpoczęta.');
+
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const lineNumber = i + 1;
+        await addReceiptLine(item, lineNumber);
+        console.log(`Krok 2/3 (Test): Dodano pozycję #${lineNumber}: ${item.name}`);
+    }
+
+    await voidCurrentTransaction();
+    console.log('Krok 3/3 (Test): Transakcja ANULOWANA.');
+    
+    return { success: true, message: 'Paragon testowy (anulowany) wysłany do drukarki.' };
+}
+
+
+
+/**
  * Drukuje raport dobowy (zerujący).
  * Komenda: [th_dailyrep]
  * Używa wariantu z automatycznym podaniem daty, aby uniknąć konieczności potwierdzania na klawiaturze drukarki.
@@ -185,6 +211,61 @@ async function printDailyReport({ cashier, cashRegister } = {}) {
     // Raport dobowy to długa operacja, nie oczekujemy bezpośredniej odpowiedzi
     return sendCommand(command, { expectsResponse: false });
 }
+
+/**
+ * Drukuje pełny raport okresowy dla zadanego przedziału dat.
+ * Komenda: [th_periodicrep]
+ */
+async function printPeriodicReport({ startDate, endDate, cashier, cashRegister }) {
+    console.log(`Wysyłanie polecenia wydruku raportu okresowego od ${startDate} do ${endDate}...`);
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    const py1 = start.getFullYear() % 100;
+    const pm1 = start.getMonth() + 1;
+    const pd1 = start.getDate();
+
+    const py2 = end.getFullYear() % 100;
+    const pm2 = end.getMonth() + 1;
+    const pd2 = end.getDate();
+
+    let partString = `${py1};${pm1};${pd1};${py2};${pm2};${pd2};0#o`;
+    if (cashRegister && cashier) {
+        partString += `${cashRegister}\r${cashier}\r`;
+    }
+
+    const part = Buffer.from(partString, 'binary');
+    const checksum = calculateChecksum(part);
+    const command = Buffer.concat([
+        Buffer.from('\x1b\x50', 'binary'),
+        part,
+        Buffer.from(checksum, 'binary'),
+        Buffer.from('\x1b\\', 'binary')
+    ]);
+
+    return sendCommand(command, { expectsResponse: false });
+}
+
+/**
+ * Anuluje bieżącą, otwartą transakcję, drukując paragon "ANULOWANY".
+ * Komenda: [th_trcancel]
+ * UWAGA: Ta funkcja zakłada, że transakcja została już rozpoczęta!
+ */
+async function voidCurrentTransaction() {
+    console.log('Wysyłanie polecenia anulowania bieżącej transakcji...');
+    const part = Buffer.from('0$e', 'binary');
+    const checksum = calculateChecksum(part);
+    const command = Buffer.concat([
+        Buffer.from('\x1b\x50', 'binary'),
+        part,
+        Buffer.from(checksum, 'binary'),
+        Buffer.from('\x1b\\', 'binary')
+    ]);
+    return sendCommand(command, { expectsResponse: false });
+}
+
+
 
 async function login(cashier, cashRegister) {
     const part = Buffer.from(`0#p${cashier}\r${cashRegister}\r`, 'binary');
@@ -246,5 +327,8 @@ module.exports = {
   printReceipt,
   clearState,
   startTransaction, // Do testów
-  printDailyReport
+  printDailyReport,
+  printPeriodicReport,
+  voidCurrentTransaction,
+  printTestVoidReceipt
 };
