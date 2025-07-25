@@ -1,2 +1,35 @@
-<li><b>GET</b> /status (zwraca surową odpowiedź)</li>
-        <li><b>GET</b> /status/parsed (zwraca sparsowany obiekt JSON)</li>
+<h3>Nowe Funkcjonalności:</h3>
+    <ul>
+        <li><b>POST</b> /transaction/receipt-advanced (body: Zobacz przykłady poniżej)</li>
+    </ul>
+    <hr>
+    <h3>Przykłady body dla Zaawansowanego Paragonu:</h3>
+    <h4>Paragon z rabatem kwotowym:</h4>
+    <pre><code>
+{
+  "items": [{"name": "Kawa", "quantity": 1, "vatRate": "B", "unitPrice": 12.00}],
+  "payments": [{"type": "CASH", "amount": 10.00}],
+  "discount": {"type": "AMOUNT", "value": 5.00, "description": "Rabat -5 PLN"}
+}
+    </code></pre>
+    <h4>Paragon "za 1 grosz" (rabat kwotowy):</h4>
+    <pre><code>
+{
+  "items": [{"name": "Produkt promocyjny", "quantity": 1, "vatRate": "A", "unitPrice": 100.00}],
+  "payments": [{"type": "CASH", "amount": 0.01}],
+  "discount": {"type": "AMOUNT", "value": 99.99}
+}
+    </code></pre>
+    <h4>Paragon z rabatem procentowym i płatnością mieszaną:</h4>
+    <pre><code>
+{
+  "items": [{"name": "Usługa", "quantity": 1, "vatRate": "A", "unitPrice": 200.00}],
+  "payments": [
+      {"type": "CASH", "amount": 100.00},
+      {"type": "CARD", "amount": 60.00, "name": "VISA"}
+    ],
+  "discount": {"type": "PERCENT", "value": 20.00, "description": "Happy Hours -20%"}
+}
+    </code></pre>
+</body>
+</html>

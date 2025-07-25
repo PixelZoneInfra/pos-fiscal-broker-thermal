@@ -84,6 +84,22 @@ apiApp.get('/cash/report', async (req, res) => {
     }
 });
 
+// === NOWY ENDPOINT DLA ZAAWANSOWANYCH PARAGONÓW ===
+apiApp.post('/transaction/receipt-advanced', async (req, res) => {
+    try {
+        const receiptData = req.body;
+        if (!receiptData.items) {
+            return res.status(400).json({ success: false, message: 'Nieprawidłowe dane paragonu (brak pozycji).' });
+        }
+        const result = await printer.printAdvancedReceipt(receiptData);
+        res.status(200).json(result);
+    } catch (error) {
+        console.error('Błąd podczas drukowania zaawansowanego paragonu:', error.message);
+        res.status(500).json({ success: false, message: 'Błąd drukowania zaawansowanego paragonu.', error: error.message });
+    }
+});
+
+
 // Zmieniamy logikę /transaction/void, aby była kompletna i niezależna
 apiApp.post('/transaction/void', async (req, res) => {
     try {
