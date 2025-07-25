@@ -142,11 +142,38 @@ async function endTransaction({ amountPaid, total }) {
     return sendCommand(command);
 }
 
-async function printReceipt({ items, payment }) {
+/**
+ * Wysyła do drukarki NIP nabywcy w trakcie otwartej transakcji.
+ * Komenda: [th_trnipset]
+ */
+async function setBuyerNip(nip) {
+    console.log(`Dodawanie NIP nabywcy: ${nip}`);
+    // Pw=1 oznacza wydruk wyróżniony
+    const part = Buffer.from(`1$N${nip}\r`, 'binary');
+    const checksum = calculateChecksum(part);
+    const command = Buffer.concat([
+        Buffer.from('\x1b\x50', 'binary'),
+        part,
+        Buffer.from(checksum, 'binary'),
+        Buffer.from('\x1b\\', 'binary')
+    ]);
+    return sendCommand(command, { expectsResponse: false });
+}
+
+// Zmodyfikowana funkcja printReceipt
+async function printReceipt({ items, payment, buyerNip }) { // Dodano parametr buyerNip
     console.log('--- Rozpoczynanie drukowania paragonu ---');
     await clearState();
+    
     await startTransaction();
-    console.log('Krok 2/4: Transakcja rozpoczęta.');
+    console.log('Krok 1/4: Transakcja rozpoczęta.');
+
+    // KROK 2: Jeśli podano NIP, wysyłamy go teraz
+    if (buyerNip) {
+        await setBuyerNip(buyerNip);
+        console.log('Krok 2/4: NIP nabywcy został wysłany.');
+    }
+
     let calculatedTotal = 0;
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
@@ -155,11 +182,14 @@ async function printReceipt({ items, payment }) {
         await addReceiptLine(item, lineNumber);
         console.log(`Krok 3/4: Dodano pozycję #${lineNumber}: ${item.name}`);
     }
+
     const total = calculatedTotal.toFixed(2);
     await endTransaction({ amountPaid: payment.amountPaid, total });
     console.log('Krok 4/4: Transakcja zakończona.');
+    
     return { success: true, message: 'Paragon wysłany do drukarki.', total };
 }
+
 
 /**
  * Drukuje pełny paragon testowy, który na końcu zawsze jest ANULOWANY.
@@ -326,9 +356,7 @@ async function getCashDrawerState() {
 
 
 /**
- * POPRAWIONA WERSJA: Odczytuje i PARSUJE informacje kasowe do czytelnego obiektu JSON.
- * Komenda: [th_scinfo]
- * @returns {Promise<object>} Zwraca obiekt z rozkodowanym statusem drukarki.
+ * POPRAWIONA WERSJA 3: Odczytuje i PARSUJE informacje kasowe do czytelnego obiektu JSON.
  */
 async function getParsedStatusInfo() {
     console.log('Wysyłanie polecenia odczytu i parsowania informacji kasowych...');
@@ -345,7 +373,6 @@ async function getParsedStatusInfo() {
 
         const flags = parts[0].split(';');
         
-        // Dynamiczne znajdowanie granicy między stawkami a licznikiem paragonów
         let ratesEndIndex = 1;
         while (parts[ratesEndIndex] && parts[ratesEndIndex].includes('.')) {
             ratesEndIndex++;
@@ -366,14 +393,20 @@ async function getParsedStatusInfo() {
             if (val === 101) return "nieaktywna";
             return val;
         };
-
+        
+        // === POPRAWKA TUTAJ ===
+        // Dodajemy .padStart(2, '0'), aby zawsze mieć dwie cyfry roku (np. "0" -> "00")
+        const year = String(flags[6]).padStart(2, '0');
+        const month = String(flags[7]).padStart(2, '0');
+        const day = String(flags[8]).padStart(2, '0');
+        
         const statusObject = {
             lastCommandError: parseInt(flags[0], 10),
             isFiscal: parseInt(flags[1], 10) === 1,
             isTransactionOpen: parseInt(flags[2], 10) === 1,
             lastTransactionOk: parseInt(flags[3], 10) === 1,
-            ramResets: parseInt(flags[7], 10),
-            lastWriteDate: `20${flags[8]}-${flags[9]}-${flags[10]}`,
+            ramResets: parseInt(flags[5], 10),
+            lastWriteDate: `20${year}-${month}-${day}`, // Teraz wynik będzie poprawny: "2000-01-01"
             vatRates: {
                 A: parseRate(vatRatesRaw[0]),
                 B: parseRate(vatRatesRaw[1]),
@@ -464,6 +497,7 @@ module.exports = {
   printVoidedReceipt,
   getStatusInfo,
   printReceipt,
+  setBuyerNip,
   clearState,
   startTransaction, // Do testów
   printDailyReport,
