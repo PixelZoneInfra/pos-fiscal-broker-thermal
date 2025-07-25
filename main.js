@@ -113,6 +113,17 @@ apiApp.post('/test/break-printer', async (req, res) => {
     }
 });
 
+// === NOWY ENDPOINT DLA RAPORTÓW ===
+apiApp.post('/reports/daily', async (req, res) => {
+    try {
+        const { cashier, cashRegister } = req.body || {};
+        await printer.printDailyReport({ cashier, cashRegister });
+        res.status(200).json({ success: true, message: 'Polecenie wydruku raportu dobowego wysłane.' });
+    } catch (error) {
+        console.error('Błąd podczas drukowania raportu dobowego:', error.message);
+        res.status(500).json({ success: false, message: 'Błąd drukowania raportu dobowego.', error: error.message });
+    }
+});
 
 // === Inicjalizacja Aplikacji ===
 app.whenReady().then(() => {

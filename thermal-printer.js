@@ -153,6 +153,39 @@ async function printReceipt({ items, payment }) {
     return { success: true, message: 'Paragon wysłany do drukarki.', total };
 }
 
+/**
+ * Drukuje raport dobowy (zerujący).
+ * Komenda: [th_dailyrep]
+ * Używa wariantu z automatycznym podaniem daty, aby uniknąć konieczności potwierdzania na klawiaturze drukarki.
+ */
+async function printDailyReport({ cashier, cashRegister } = {}) {
+    console.log('Wysyłanie polecenia wydruku raportu dobowego...');
+    
+    const now = new Date();
+    const year = now.getFullYear() % 100; // Dwie ostatnie cyfry roku
+    const month = now.getMonth() + 1;      // Miesiące są od 0 do 11
+    const day = now.getDate();
+
+    // Budujemy część polecenia, która podlega sumie kontrolnej
+    // Format: 1;Py;Pm;Pd#r[<nr_kasy>CR<kasjer>CR]
+    let partString = `1;${year};${month};${day}#r`;
+    if (cashRegister && cashier) {
+        partString += `${cashRegister}\r${cashier}\r`;
+    }
+    
+    const part = Buffer.from(partString, 'binary');
+    const checksum = calculateChecksum(part);
+    const command = Buffer.concat([
+        Buffer.from('\x1b\x50', 'binary'),
+        part,
+        Buffer.from(checksum, 'binary'),
+        Buffer.from('\x1b\\', 'binary')
+    ]);
+
+    // Raport dobowy to długa operacja, nie oczekujemy bezpośredniej odpowiedzi
+    return sendCommand(command, { expectsResponse: false });
+}
+
 async function login(cashier, cashRegister) {
     const part = Buffer.from(`0#p${cashier}\r${cashRegister}\r`, 'binary');
     const checksum = calculateChecksum(part);
@@ -212,5 +245,6 @@ module.exports = {
   getStatusInfo,
   printReceipt,
   clearState,
-  startTransaction // Do testów
+  startTransaction, // Do testów
+  printDailyReport
 };
