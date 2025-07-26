@@ -178,6 +178,7 @@ async function addPaymentLine({ type, amount, name }) {
     switch(type) {
         case 'CASH': pfx = 0; break;
         case 'CARD': pfx = 1; break;
+		case 'BON': pfx = 3; break; // <-- DODAJ TĘ LINIJKĘ
         default: pfx = 4;
     }
     const partString = `1;${pfx}$b${amount.toFixed(2)}/${name || type}\r`;
@@ -188,36 +189,88 @@ async function addPaymentLine({ type, amount, name }) {
 }
 
 /**
- * Krok D: Finalizuje paragon po wszystkich operacjach.
- * Używamy prostej komendy [th_trend], ponieważ wszystkie obliczenia są już w drukarce.
+ * Krok D: OSTATECZNA WERSJA - Finalizuje paragon po wszystkich operacjach.
+ * Używa komendy [th_trftrend], która jest poprawnym zakończeniem po [th_trpayment].
  */
-async function finalizeReceipt(amountPaid, total) {
-    // Pz=1 (zatwierdzenie), Pr=0 (bez rabatu w tej komendzie)
-    const part = Buffer.from(`1;0$e001\r${amountPaid.toFixed(2)}/${total.toFixed(2)}/`, 'binary');
+async function finalizeReceipt() {
+    console.log('Finalizowanie wydruku za pomocą poprawnej komendy [th_trftrend]...');
+    // Komenda: ESC P 28;Pc $z <checksum> ESC \
+    // Pc=0 oznacza standardowe zakończenie z wysuwem papieru
+    const part = Buffer.from('28;0$z', 'binary');
+    const checksum = calculateChecksum(part);
+    const command = Buffer.concat([
+        Buffer.from('\x1b\x50', 'binary'),
+        part,
+        Buffer.from(checksum, 'binary'),
+        Buffer.from('\x1b\\', 'binary')
+    ]);
+    return sendCommand(command, { expectsResponse: false });
+}
+
+
+// === NOWA, POPRAWNA IMPLEMENTACJA FINALIZACJI ===
+
+/**
+ * Etap A: OSTATECZNA WERSJA - Finalizuje fiskalną część paragonu.
+ * Wysyła th_trxend1 ($y) z kluczowym parametrem Pc=3.
+ * Ta wersja NIE wysyła ponownie informacji o rabacie, a jedynie potwierdza obliczenia.
+ */
+async function endFiscalPart({ total, dsp, discount, buyerNip }) {
+    console.log('Etap A: Zamykanie części fiskalnej paragonu...');
+    const Pn = 0, Pc = 3, Py = 0, Pkb = 0, Pkz = 0;
+    const Pns = buyerNip ? 1 : 0;
+    const Pdsp = dsp < 0 ? 1 : 0;
+    
+    // === KLUCZOWA POPRAWKA ===
+    // Nie deklarujemy na nowo rabatu (Px=0, Pxs=0), ponieważ został już zastosowany w poprzednim kroku.
+    const pParams = [Pn, Pc, Py, Pdsp, 0, Pkb, Pkz, Pns, 0, 0, 0, 0].join(';');
+    
+    const textPart = ['Kasa 1', 'Kasjer', (buyerNip || '')].join('\r');
+    
+    const valuePart = [
+        total.toFixed(2),
+        Math.abs(dsp).toFixed(2),
+        '0.00', // RABAT - ustawiony na 0, bo już zastosowany
+        '0.00', // WPLATA - nieistotna
+        '0.00/' // RESZTA - nieistotna
+    ].join('/');
+
+    const partString = `${pParams}$y${textPart}\r${valuePart}`;
+    const part = Buffer.from(partString, 'binary');
     const checksum = calculateChecksum(part);
     const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
     return sendCommand(command, { expectsResponse: false });
 }
 
+/**
+ * Etap B: Finalizuje wydruk, drukując płatności i obcinając papier.
+ * Wysyła th_trftrend ($z) z parametrem 28.
+ */
+async function finalizePrintout() {
+    console.log('Etap B: Finalizowanie wydruku (płatności i ucięcie)...');
+    const part = Buffer.from('28;0$z', 'binary'); // 28;Pc $z
+    const checksum = calculateChecksum(part);
+    const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
+    return sendCommand(command, { expectsResponse: false });
+}
 
 /**
- * OSTATECZNA WERSJA: Główna funkcja sterująca drukowaniem zaawansowanego paragonu.
+ * Główna funkcja sterująca drukowaniem zaawansowanego paragonu.
  */
 async function printAdvancedReceipt({ items, payments = [], discount = null, buyerNip = null }) {
-    console.log('--- Rozpoczynanie drukowania ZAAWANSOWANEGO paragonu (metoda krokowa) ---');
+    console.log('--- Rozpoczynanie drukowania ZAAWANSOWANEGO paragonu (metoda dwuetapowa $y + $z) ---');
     await clearState();
     
-    // KROK 1: Start i Pozycje
+    // Krok 1: Start i Pozycje
     await startTransaction();
     if (buyerNip) await setBuyerNip(buyerNip);
-    let calculatedTotal = 0;
+    let calculatedTotal = items.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);
     for (let i = 0; i < items.length; i++) {
-        calculatedTotal += items[i].quantity * items[i].unitPrice;
         await addReceiptLine(items[i], i + 1);
     }
-    console.log(`Krok 1/4: Transakcja rozpoczęta, dodano ${items.length} pozycji.`);
+    console.log('Krok 1/4: Transakcja rozpoczęta, dodano pozycje.');
 
-    // KROK 2: Rabat (jeśli istnieje)
+    // Krok 2: Rabat
     let finalTotal = calculatedTotal;
     if (discount) {
         await applyDiscount(calculatedTotal, discount);
@@ -227,16 +280,18 @@ async function printAdvancedReceipt({ items, payments = [], discount = null, buy
         console.log('Krok 2/4: Rabat został zastosowany.');
     }
 
-    // KROK 3: Płatności
+    // Krok 3: Płatności
     for (const payment of payments) {
         await addPaymentLine(payment);
     }
-    console.log(`Krok 3/4: Dodano ${payments.length} form płatności.`);
+    console.log('Krok 3/4: Płatności zostały wysłane.');
 
-    // KROK 4: Finalizacja
+    // Krok 4: Finalizacja dwuetapowa
     const amountPaid = payments.reduce((sum, p) => sum + p.amount, 0);
-    await finalizeReceipt(amountPaid, finalTotal);
-    console.log('Krok 4/4: Paragon sfinalizowany.');
+    const dsp = finalTotal - amountPaid;
+    await endFiscalPart({ total: finalTotal, dsp, discount, buyerNip });
+    await finalizePrintout();
+    console.log('Krok 4/4: Paragon sfinalizowany (fiskalnie i wydruk).');
     
     return { success: true, message: 'Zaawansowany paragon wysłany do drukarki.', total: finalTotal };
 }
