@@ -99,6 +99,17 @@ apiApp.post('/transaction/receipt-advanced', async (req, res) => {
     }
 });
 
+// === NOWY ENDPOINT DO OTWIERANIA SZUFLADY ===
+apiApp.post('/cash-drawer/open', async (req, res) => {
+    try {
+        await printer.openCashDrawer();
+        res.status(200).json({ success: true, message: 'Polecenie otwarcia szuflady wysłane.' });
+    } catch (error) {
+        console.error('Błąd podczas otwierania szuflady:', error.message);
+        res.status(500).json({ success: false, message: 'Błąd otwierania szuflady.', error: error.message });
+    }
+});
+
 
 // Zmieniamy logikę /transaction/void, aby była kompletna i niezależna
 apiApp.post('/transaction/void', async (req, res) => {

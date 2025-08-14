@@ -264,11 +264,25 @@ async function printAdvancedReceipt({ items, payments = [], discount = null, buy
     // Krok 1: Start i Pozycje
     await startTransaction();
     if (buyerNip) await setBuyerNip(buyerNip);
-    let calculatedTotal = items.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);
+	
+    // === KLUCZOWA POPRAWKA TUTAJ ===
+    // Obliczamy sumę PRZED rabatem na cały paragon, ale PO rabatach na linie
+    let calculatedTotal = 0;
     for (let i = 0; i < items.length; i++) {
-        await addReceiptLine(items[i], i + 1);
+        const item = items[i];
+        let itemTotal = item.quantity * item.unitPrice;
+        // Jeśli pozycja ma rabat, odejmujemy go od sumy
+        if (item.discount) {
+            if (item.discount.type === 'AMOUNT') {
+                itemTotal -= item.discount.value;
+            } else if (item.discount.type === 'PERCENT') {
+                itemTotal *= (1 - item.discount.value / 100);
+            }
+        }
+        calculatedTotal += itemTotal;
+        await addReceiptLine(item, i + 1);
     }
-    console.log('Krok 1/4: Transakcja rozpoczęta, dodano pozycje.');
+    console.log(`Krok 1/5: Transakcja rozpoczęta, dodano pozycje.`);
 
     // Krok 2: Rabat
     let finalTotal = calculatedTotal;
@@ -315,14 +329,50 @@ async function startTransaction() {
     return sendCommand(command);
 }
 
+/**
+ * OSTATECZNA WERSJA: Dodaje linię paragonu z opcjonalną obsługą rabatu na pozycję.
+ * Komenda: [th_trline]
+ */
 async function addReceiptLine(item, lineNumber) {
-    const { name, quantity, vatRate, unitPrice } = item;
-    const lineTotal = (quantity * unitPrice).toFixed(2);
-    const part = Buffer.from(`${lineNumber}$l${name}\r${quantity}\r${vatRate}/${unitPrice}/${lineTotal}/`, 'binary');
+    const { name, quantity, vatRate, unitPrice, discount } = item;
+    
+    // BRUTTO to zawsze cena przed jakimkolwiek rabatem
+    const brutto = (quantity * unitPrice).toFixed(2);
+    let commandPart;
+
+    if (discount && discount.value > 0) {
+        // --- SCENARIUSZ Z RABATEM NA POZYCJĘ ---
+        console.log(`Dodawanie pozycji #${lineNumber} z rabatem: ${name}`);
+        
+        let Pr = 0; // Rodzaj rabatu
+        if (discount.type === 'PERCENT') Pr = 2;
+        if (discount.type === 'AMOUNT') Pr = 1;
+
+        // Używamy Po=16, aby móc wysłać własny opis rabatu
+        const Po = 16;
+        const discountDescription = discount.description || 'Rabat';
+        
+        // Format: Pi;Pr;Po$l<nazwa>CR<ilość>CR<ptu>/CENA/BRUTTO/RABAT/<OPIS RABATU>CR
+        commandPart = `${lineNumber};${Pr};${Po}$l${name}\r${quantity}\r${vatRate}/${unitPrice}/${brutto}/${discount.value.toFixed(2)}/${discountDescription}\r`;
+
+    } else {
+        // --- SCENARIUSZ STANDARDOWY (BEZ ZMIAN) ---
+        // Format: Pi$l<nazwa>CR<ilość>CR<ptu>/CENA/BRUTTO/
+        commandPart = `${lineNumber}$l${name}\r${quantity}\r${vatRate}/${unitPrice}/${brutto}/`;
+    }
+    
+    const part = Buffer.from(commandPart, 'binary');
     const checksum = calculateChecksum(part);
-    const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
+    const command = Buffer.concat([
+        Buffer.from('\x1b\x50', 'binary'),
+        part,
+        Buffer.from(checksum, 'binary'),
+        Buffer.from('\x1b\\', 'binary')
+    ]);
+    
     return sendCommand(command);
 }
+
 
 async function endTransaction({ amountPaid, total }) {
     const part = Buffer.from(`1;0$e001\r${amountPaid}/${total}/`, 'binary');
@@ -628,6 +678,35 @@ async function getParsedStatusInfo() {
     }
 }
 
+/**
+ * OSTATECZNA WERSJA: Wysyła poprawną komendę [th_dspdrw] bez sumy kontrolnej,
+ * zgodnie ze specyfikacją protokołu Thermal.
+ */
+async function openCashDrawer() {
+    console.log('Wysyłanie poprawnej komendy [th_dspdrw] otwarcia szuflady...');
+    
+    // Zgodnie ze specyfikacją: ESC P 1 $d ESC \
+    // Ta komenda nie wymaga sumy kontrolnej.
+    const command = Buffer.from([
+        0x1b, 0x50, // ESC P
+        0x31,       // Ps = 1 (otwarcie szuflady)
+        0x24, 0x64, // Identyfikator komendy: $d
+        0x1b, 0x5c  // Terminator: ESC \
+    ]);
+    
+    // Wysyłamy polecenie bezpośrednio, omijając kolejkę,
+    // ponieważ jest to prosta, niezależna operacja.
+    return new Promise((resolve, reject) => {
+        port.write(command, (err) => {
+            if (err) {
+                return reject(new Error(`Błąd zapisu do portu: ${err.message}`));
+            }
+            console.log('Wysłano polecenie (hex):', command.toString('hex'));
+            resolve('Polecenie otwarcia szuflady wysłane pomyślnie.');
+        });
+    });
+}
+
 async function login(cashier, cashRegister) {
     const part = Buffer.from(`0#p${cashier}\r${cashRegister}\r`, 'binary');
     const checksum = calculateChecksum(part);
@@ -696,5 +775,6 @@ module.exports = {
   reprintLastReceipt,
   getCashDrawerState,
   printAdvancedReceipt,
-  getParsedStatusInfo
+  getParsedStatusInfo,
+  openCashDrawer
 };
