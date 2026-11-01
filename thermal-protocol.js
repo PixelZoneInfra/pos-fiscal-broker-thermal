@@ -59,7 +59,8 @@ function bodyOf(token, prefix, checked = false) {
 
 function number(value) {
   const text = String(value).trim().replace(',', '.');
-  if (!/^-?\d+(\.\d+)?$/.test(text)) throw new Error('Nieprawidłowa liczba w odpowiedzi.');
+  // Thermal can omit fractional zeroes: "0." is a complete numeric value.
+  if (!/^-?\d+(\.\d*)?$/.test(text)) throw new Error('Nieprawidłowa liczba w odpowiedzi.');
   const result = Number(text);
   if (!Number.isFinite(result)) throw new Error('Liczba poza zakresem.');
   return result;

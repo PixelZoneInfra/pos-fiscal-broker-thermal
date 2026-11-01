@@ -33,6 +33,31 @@ test('corrupt checksums and invalid RTC dates are rejected', () => {
   assert.throws(() => parseClock(clock), /data RTC/);
 });
 
+test('Thermal status accepts zero totals with a trailing decimal separator reported by a physical XL2', () => {
+  // Numeric forms from the field report; cash amount and device ID are anonymized.
+  const token = new Decoder().feed(frame('2#X0;1;0;1;1;0;26;11;1/23.00/08.00/05.00/00.00/101/101/100/0/0./0./0./0./0./0./0./12.50/TEST123'))[0];
+  const status = parseStatus(token);
+  assert.equal(status.lastCommandError, 0);
+  assert.equal(status.isFiscal, true);
+  assert.equal(status.isTransactionOpen, false);
+  assert.equal(status.lastTransactionOk, true);
+  assert.equal(status.receiptsSinceDailyReport, 0);
+  assert.deepEqual(status.dailyTotals, { A: 0, B: 0, C: 0, D: 0, E: 0, F: 0, G: 0 });
+  assert.equal(status.cashInDrawer, 12.5);
+  assert.equal(status.vatRates.B, 8);
+  assert.equal(status.vatRates.C, 5);
+});
+
+test('trailing separators remain strict: missing or malformed numbers are rejected, not coerced to zero', () => {
+  const statusWithCash = cash => new Decoder().feed(frame(`2#X0;1;0;1;1;0;26;11;1/23/8/5/0/101/101/100/0/0./0./0./0./0./0./0./${cash}/TEST123`))[0];
+  for (const [value, expected] of [['0.', 0], ['0,', 0], ['12.', 12], ['12,', 12], ['12.50', 12.5], ['12,50', 12.5], ['-12.', -12]]) {
+    assert.equal(parseStatus(statusWithCash(value)).cashInDrawer, expected);
+  }
+  for (const value of ['', '.', ',', '0..', '0.,', '12x', '1e2', 'NaN', 'Infinity', '--1', '1 2']) {
+    assert.throws(() => parseStatus(statusWithCash(value)), /Nieprawidłowa liczba/);
+  }
+});
+
 test('transport assembles fragmented responses, checks CRC and never reuses a timed-out stream', async () => {
   const port = new PrinterPort();
   const transport = new ThermalTransport(port, { timeoutMs: 10 });
