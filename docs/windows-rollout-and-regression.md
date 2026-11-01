@@ -1,5 +1,7 @@
 # Jedna sesja wdrożenia i regresji brokera na Windows
 
+**Pierwsze uruchomienie bez edytowania plików: [START-TUTAJ.md](../START-TUTAJ.md).** Poniżej jest pełny techniczny plan odbioru API; nie wszystkie jego kroki są wymagane do pierwszego odczytu drukarki i testu obecnego POS.
+
 Wersja obejmuje fundament z PR #2 oraz kolejny PR rezerwacji. Pobieramy **cały końcowy branch** `feature/fiscal-reservations-and-regression-20261101`, nie stare `main` i nie dwa wybrane pliki. Nowy PR jest skierowany do `feature/fiscal-safety-stage-1-20261101`; po ewentualnym scaleniu do tego brancha zawiera on oba etapy. Samo otwarcie/scalenie PR nie instaluje brokera na komputerze.
 
 Cel sesji: sprawdzić komunikację XL2, wszystkie polecenia dostępne z POS, nowy kontrakt rezerwacji i zgodność dotychczasowego POS. Odbiorca kolejki, kod POS, centralna baza, płatności, faktury i poczta nie są wdrażane tym pakietem. Rzeczywiste wydruki/operacje kasowe operator wykonuje dopiero dla uzgodnionych transakcji. Zapis JSON z testów nie zastępuje oceny wydruku.
@@ -19,14 +21,13 @@ setup-windows.cmd
 
 Skrypt wykonuje zwykłe `npm ci` (z instalacją Electron), potem `npm test`; **nie uruchamia brokera i nie korzysta z USB**. Przy błędzie instalacji lub testów przerwać. `--ignore-scripts` jest wyłącznie opcją CI, nie przygotowaniem komputera do startu Electron.
 
-Przygotować także lokalny plik konfiguracyjny, wczytywany przez wszystkie trzy skrypty startowe:
+Do pierwszego odczytu drukarki nie potrzeba konfiguracji. Przed testem przez stronę POS można użyć kreatora: skopiować cały adres swojej strony POS z przeglądarki, następnie uruchomić:
 
 ```bat
-copy broker-local.example.cmd broker-local.cmd
-notepad broker-local.cmd
+configure-pos.cmd
 ```
 
-W pliku wpisać `set "FISCAL_ALLOWED_ORIGINS=..."`, zastępując `...` **dokładnym originem aktualnego POS z przeglądarki** (protokół i host, ewentualny port, bez ścieżki i końcowego `/`). Nie kopiować przykładowej domeny jako prawdziwego adresu. Można odczytać `window.location.origin` w konsoli na stronie POS; ewentualny drugi frontend oddzielić przecinkiem. Ta opcja obsługuje CORS/OPTIONS dla JSON i nowych nagłówków tokenu. Bez konfiguracji broker zachowuje wcześniejsze zachowanie HTTP bez nagłówków CORS; sama udana próba z CMD nie dowodzi połączenia z przeglądarki. `broker-local.cmd` jest ignorowany przez Git i pozostaje na tym komputerze. Nie zmienia ENV na Render ani globalnych ustawień Windows.
+Wkleić pełny adres do pytania w CMD i nacisnąć Enter. Kreator sam wyodrębnia adres serwera POS i zapisuje `broker-local.cmd`; zachowuje pozostałe ustawienia i kopię `.bak`. Nie trzeba otwierać Notatnika, rozumieć CORS ani ręcznie wpisywać zmiennych. Ta lokalna konfiguracja obsługuje przeglądarkę POS i jest wczytywana przez skrypty startowe. Bez niej pozostają dostępne odczyty z narzędzia CMD. Pliki są ignorowane przez Git; kreator nie zmienia ENV na Render, globalnych ustawień Windows ani komend drukarki.
 
 Domyślnie używany jest nadal COM3, 115200/8/N/1. Jeśli **działająca lokalna wersja** używa innego COM, wpisać go w tym samym pliku przez `set "FISCAL_SERIAL_PORT=COMx"`, podstawiając rzeczywistą nazwę. Nie zmieniać szybkości ani konfiguracji drukarki. Faktycznie wybrany port pokaże `/broker/status` jako `serialPort`. Można też po diagnostyce ustawić `FISCAL_PRINTER_UNIQUE_NUMBER`, aby zwykłe polecenia odrzucały inną podłączoną drukarkę.
 

@@ -1,5 +1,7 @@
 # POSNET Thermal broker — wersja do weryfikacji
 
+**Pierwsze uruchomienie: [START-TUTAJ.md — konkretne kroki bez edytowania plików](START-TUTAJ.md).**
+
 Lokalny broker Electron/Express dla Posnet Thermal XL2 Online. API działa na `127.0.0.1:3030`, domyślny port drukarki pozostaje `COM3`, 115200/8/N/1. Jeśli lokalna działająca instalacja ma inny port, można go wskazać przez `FISCAL_SERIAL_PORT`, bez edycji komend. Kodowanie, komendy pozycji, rabaty, VAT i płatności zachowują dotychczasowy format.
 
 Ta zmiana przygotowuje urządzenie do przyszłej kolejki online. Nie zawiera odbiorcy kolejki, połączeń do baz, płatności, KSeF, poczty ani operacji magazynowych. Uruchomienie wersji testowej na stanowisku wymaga przejścia [procedury sprzętowej](docs/hardware-verification.md).
