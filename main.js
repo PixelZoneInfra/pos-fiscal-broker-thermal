@@ -1,243 +1,48 @@
 const { app, BrowserWindow } = require('electron');
-const express = require('express');
-const path = require('path');
-const printer = require('./thermal-printer');
+const path = require('node:path');
 
-const API_PORT = 3030;
+// Do this before opening COM3 or the journal.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  let journal;
+  let server;
+  app.whenReady().then(() => {
+    const { SerialPort } = require('serialport');
+    const { ThermalTransport } = require('./thermal-transport');
+    const { createPrinter } = require('./thermal-printer');
+    const { OperationJournal } = require('./operation-journal');
+    const { BrokerService } = require('./broker-service');
+    const { createApi } = require('./api');
 
-function createWindow() {
-  const mainWindow = new BrowserWindow({ width: 800, height: 600 });
-  mainWindow.loadFile('index.html');
+    journal = new OperationJournal(path.join(app.getPath('userData'), 'fiscal-operations'));
+    const port = new SerialPort({
+      path: 'COM3', baudRate: 115200, dataBits: 8, stopBits: 1, parity: 'none', autoOpen: false,
+    });
+    const transport = new ThermalTransport(port);
+    const printer = new BrokerService(createPrinter(transport), journal, {
+      onlineEnabled: process.env.FISCAL_ONLINE_ENABLED === 'true',
+      branchId: Number(process.env.FISCAL_BRANCH_ID),
+      environment: process.env.FISCAL_ENVIRONMENT,
+      printerUniqueNumber: process.env.FISCAL_PRINTER_UNIQUE_NUMBER,
+    });
+    port.open(error => {
+      if (error) console.error('Błąd otwarcia COM3:', error.message);
+    });
+    server = createApi(printer).listen(3030, '127.0.0.1', () => {
+      console.log('API: http://127.0.0.1:3030; dziennik:', path.join(app.getPath('userData'), 'fiscal-operations'));
+    });
+    server.on('error', error => { console.error('Nie można uruchomić API:', error.message); app.quit(); });
+    const createWindow = () => {
+      const window = new BrowserWindow({ width: 800, height: 600 });
+      window.loadFile('index.html');
+    };
+    createWindow();
+    app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
+  }).catch(error => {
+    console.error('Broker nie został uruchomiony:', error.message);
+    app.quit();
+  });
+  app.on('will-quit', () => { server?.close(); journal?.close(); });
+  app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 }
-
-const apiApp = express();
-apiApp.use(express.json());
-
-// --- ENDPOINTY API ---
-
-apiApp.post('/transaction/receipt', async (req, res) => {
-    try {
-        const receiptData = req.body;
-        if (!receiptData.items || !receiptData.payment) {
-            return res.status(400).json({ success: false, message: 'Nieprawidłowe dane paragonu.' });
-        }
-        const result = await printer.printReceipt(receiptData);
-        res.status(200).json(result);
-    } catch (error) {
-        console.error('Błąd podczas drukowania paragonu:', error.message);
-        res.status(500).json({ success: false, message: 'Błąd drukowania paragonu.', error: error.message });
-    }
-});
-
-apiApp.post('/cashier/login', async (req, res) => {
-  try {
-    const { cashier = 'Kasjer 1', register = 'Kasa 1' } = req.body;
-    await printer.login(cashier, register);
-    res.status(200).json({ success: true, message: `Kasjer '${cashier}' zalogowany.` });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Błąd logowania kasjera.', error: error.message });
-  }
-});
-
-apiApp.post('/cashier/logout', async (req, res) => {
-  try {
-    const { cashier = 'Kasjer 1', register = 'Kasa 1' } = req.body;
-    await printer.logout(cashier, register);
-    res.status(200).json({ success: true, message: `Kasjer '${cashier}' wylogowany.` });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Błąd wylogowania kasjera.', error: error.message });
-  }
-});
-
-apiApp.post('/cash/deposit', async (req, res) => {
-  try {
-    const { amount } = req.body;
-    if (!amount || isNaN(parseFloat(amount))) {
-        return res.status(400).json({ success: false, message: 'Nieprawidłowa lub brakująca kwota.' });
-    }
-    await printer.cashDeposit(amount);
-    res.status(200).json({ success: true, message: `Wpłacono ${amount} do kasy.` });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Błąd wpłaty do kasy.', error: error.message });
-  }
-});
-
-apiApp.post('/cash/withdraw', async (req, res) => {
-    try {
-        const { amount } = req.body;
-        if (!amount || isNaN(parseFloat(amount))) {
-            return res.status(400).json({ success: false, message: 'Nieprawidłowa lub brakująca kwota.' });
-        }
-        await printer.cashWithdrawal(amount);
-        res.status(200).json({ success: true, message: `Wypłacono ${amount} z kasy.` });
-    } catch (error) {
-        res.status(500).json({ success: false, message: 'Błąd wypłaty z kasy.', error: error.message });
-    }
-});
-
-apiApp.get('/cash/report', async (req, res) => {
-    try {
-        await printer.getCashDrawerStateReport();
-        res.status(200).json({ success: true, message: 'Polecenie wydruku raportu stanu kasy wysłane.' });
-    } catch (error) {
-        res.status(500).json({ success: false, message: 'Błąd drukowania raportu.', error: error.message });
-    }
-});
-
-// === NOWY ENDPOINT DLA ZAAWANSOWANYCH PARAGONÓW ===
-apiApp.post('/transaction/receipt-advanced', async (req, res) => {
-    try {
-        const receiptData = req.body;
-        if (!receiptData.items) {
-            return res.status(400).json({ success: false, message: 'Nieprawidłowe dane paragonu (brak pozycji).' });
-        }
-        const result = await printer.printAdvancedReceipt(receiptData);
-        res.status(200).json(result);
-    } catch (error) {
-        console.error('Błąd podczas drukowania zaawansowanego paragonu:', error.message);
-        res.status(500).json({ success: false, message: 'Błąd drukowania zaawansowanego paragonu.', error: error.message });
-    }
-});
-
-// === NOWY ENDPOINT DO OTWIERANIA SZUFLADY ===
-apiApp.post('/cash-drawer/open', async (req, res) => {
-    try {
-        await printer.openCashDrawer();
-        res.status(200).json({ success: true, message: 'Polecenie otwarcia szuflady wysłane.' });
-    } catch (error) {
-        console.error('Błąd podczas otwierania szuflady:', error.message);
-        res.status(500).json({ success: false, message: 'Błąd otwierania szuflady.', error: error.message });
-    }
-});
-
-
-// Zmieniamy logikę /transaction/void, aby była kompletna i niezależna
-apiApp.post('/transaction/void', async (req, res) => {
-    try {
-        // Kompletny i bezpieczny proces: wyczyść, rozpocznij, anuluj.
-        // Gwarantuje wydruk paragonu "ANULOWANY" nawet jeśli drukarka była w czystym stanie.
-        console.log('--- Rozpoczynanie procedury drukowania paragonu ANULOWANEGO ---');
-        await printer.clearState();
-        await printer.startTransaction();
-        await printer.voidCurrentTransaction();
-        res.status(200).json({ success: true, message: 'Polecenie wydruku paragonu ANULOWANEGO wysłane.' });
-    } catch (error) {
-        console.error('Błąd podczas anulowania transakcji:', error.message);
-        res.status(500).json({ success: false, message: 'Błąd anulowania transakcji.', error: error.message });
-    }
-});
-
-// === NOWY ENDPOINT DO PONOWNEGO WYDRUKU ===
-apiApp.post('/transaction/reprint-last', async (req, res) => {
-    try {
-        await printer.reprintLastReceipt();
-        res.status(200).json({ success: true, message: 'Polecenie ponownego wydruku wysłane.' });
-    } catch (error) {
-        console.error('Błąd podczas ponownego drukowania paragonu:', error.message);
-        res.status(500).json({ success: false, message: 'Błąd ponownego drukowania paragonu.', error: error.message });
-    }
-});
-
-// === NOWY ENDPOINT DO ODCZYTU STANU KASY ===
-apiApp.get('/cash/state', async (req, res) => {
-    try {
-        const cashAmount = await printer.getCashDrawerState();
-        res.status(200).json({ success: true, cashAmount: cashAmount });
-    } catch (error) {
-        console.error('Błąd podczas odczytu stanu kasy:', error.message);
-        res.status(500).json({ success: false, message: 'Błąd odczytu stanu kasy.', error: error.message });
-    }
-});
-
-// === NOWY ENDPOINT Z PARSOWANIEM ===
-apiApp.get('/status/parsed', async (req, res) => {
-    try {
-        const parsedStatus = await printer.getParsedStatusInfo();
-        res.status(200).json({ success: true, status: parsedStatus });
-    } catch (error) {
-        console.error('Błąd podczas odczytu parsowanego statusu:', error.message);
-        res.status(500).json({ success: false, message: 'Błąd odczytu i parsowania statusu.', error: error.message });
-    }
-});
-
-
-apiApp.get('/status', async (req, res) => {
-    try {
-      const statusData = await printer.getStatusInfo();
-      res.status(200).json({ success: true, message: 'Odczytano status drukarki.', data: statusData });
-    } catch (error) {
-      res.status(500).json({ success: false, message: 'Błąd odczytu statusu.', error: error.message });
-    }
-});
-
-// Endpoint do testowania błędu (do usunięcia po testach)
-apiApp.post('/test/break-printer', async (req, res) => {
-    console.log('--- Rozpoczynanie symulacji błędu ---');
-    try {
-        await printer.startTransaction();
-        res.status(200).json({ success: true, message: 'Symulacja błędu zakończona. Drukarka jest teraz w stanie otwartej transakcji.' });
-    } catch (error) {
-        res.status(500).json({ success: false, message: 'Błąd podczas symulacji.', error: error.message });
-    }
-});
-
-// === NOWY ENDPOINT DLA RAPORTÓW ===
-apiApp.post('/reports/daily', async (req, res) => {
-    try {
-        const { cashier, cashRegister } = req.body || {};
-        await printer.printDailyReport({ cashier, cashRegister });
-        res.status(200).json({ success: true, message: 'Polecenie wydruku raportu dobowego wysłane.' });
-    } catch (error) {
-        console.error('Błąd podczas drukowania raportu dobowego:', error.message);
-        res.status(500).json({ success: false, message: 'Błąd drukowania raportu dobowego.', error: error.message });
-    }
-});
-
-apiApp.post('/reports/periodic', async (req, res) => {
-    try {
-        const { startDate, endDate, cashier, cashRegister } = req.body;
-        if (!startDate || !endDate) {
-            return res.status(400).json({ success: false, message: 'Brak daty początkowej lub końcowej.' });
-        }
-        await printer.printPeriodicReport({ startDate, endDate, cashier, cashRegister });
-        res.status(200).json({ success: true, message: 'Polecenie wydruku raportu okresowego wysłane.' });
-    } catch (error) {
-        console.error('Błąd podczas drukowania raportu okresowego:', error.message);
-        res.status(500).json({ success: false, message: 'Błąd drukowania raportu okresowego.', error: error.message });
-    }
-});
-
-// === ENDPOINTY TESTOWE ===
-apiApp.post('/test/void-receipt', async (req, res) => {
-    try {
-        const receiptData = req.body;
-        if (!receiptData.items) {
-            return res.status(400).json({ success: false, message: 'Nieprawidłowe dane paragonu testowego.' });
-        }
-        const result = await printer.printTestVoidReceipt(receiptData);
-        res.status(200).json(result);
-    } catch (error) {
-        console.error('Błąd podczas drukowania paragonu testowego:', error.message);
-        res.status(500).json({ success: false, message: 'Błąd drukowania paragonu testowego.', error: error.message });
-    }
-});
-
-// === Inicjalizacja Aplikacji ===
-app.whenReady().then(() => {
-  createWindow();
-
-  // NIE wywołujemy już żadnej specjalnej konfiguracji.
-  // Po prostu uruchamiamy serwer API.
-  // Logika otwierania portu jest teraz w całości w thermal-printer.js.
-  apiApp.listen(API_PORT, () => {
-    console.log(`🚀 Serwer API nasłuchuje na http://localhost:${API_PORT}`);
-  });
-  
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});

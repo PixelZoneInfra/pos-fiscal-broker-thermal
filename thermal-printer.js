@@ -1,28 +1,7 @@
-const { SerialPort } = require('serialport');
+const { frame, bodyOf, parseStatus, parseIdentity, parseCounter, parseClock } = require('./thermal-protocol');
 
-const port = new SerialPort({
-  path: 'COM3',
-  baudRate: 115200,
-  dataBits: 8,
-  stopBits: 1,
-  parity: 'none',
-  autoOpen: false, 
-});
-
-const commandQueue = [];
-let isProcessing = false;
-
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-port.open((err) => {
-  if (err) return console.error('❌ Błąd otwierania portu COM3:', err.message);
-  console.log('✅ Połączenie z portem COM3 otwarte.');
-  processQueue();
-});
-
-port.on('error', (err) => {
-  console.error('❌ Błąd portu szeregowego:', err.message);
-});
+// No serial side effects on import. The broker owns the whole-operation lock.
+function createPrinter(transport, { delay = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
 
 function calculateChecksum(commandPart) {
   let check = 255;
@@ -32,81 +11,33 @@ function calculateChecksum(commandPart) {
   return check.toString(16).toUpperCase().padStart(2, '0');
 }
 
-async function processQueue() {
-    if (isProcessing || commandQueue.length === 0) return;
-    isProcessing = true;
-    const task = commandQueue.shift();
-    try {
-        if (task.type === 'delay') {
-            await delay(task.duration);
-            task.resolve();
-        } else {
-            const response = await executeCommand(task.command, task.expectsResponse);
-            task.resolve(response);
-        }
-    } catch (error) {
-        // Teraz to zadziała, bo każdy task ma .reject
-        task.reject(error);
-    } finally {
-        isProcessing = false;
-        processQueue();
+function sendCommand(command, { expectsResponse = false, report = false } = {}) {
+    if (expectsResponse) {
+        return transport.request(command, '1#X').then(token => `\x1bP${token.value.toString('binary')}\x1b\\`);
+    }
+    return transport.command(command, { report });
+}
+
+const addDelayToQueue = delay;
+
+function expectTransaction(state, open, finished) {
+    if (!state.fiscal || state.transactionOpen !== open || state.transactionOk !== finished) {
+        throw new Error('Nieoczekiwany stan transakcji fiskalnej.');
     }
 }
 
-function executeCommand(command, expectsResponse) {
-  return new Promise((resolve, reject) => {
-    // Ta funkcja jest wywoływana tylko dla poleceń, które OCZEKUJĄ odpowiedzi
-    const onData = (chunk) => {
-        port.removeListener('data', onData);
-        clearTimeout(timeoutId);
-        console.log(`Otrzymano odpowiedź (hex): ${chunk.toString('hex')}`);
-        // === KLUCZOWA POPRAWKA TUTAJ ===
-        // Zwracamy faktyczne dane, a nie ogólny komunikat
-        resolve(chunk.toString('binary')); 
-    };
-
-    const timeoutId = setTimeout(() => {
-        port.removeListener('data', onData);
-        reject(new Error('Timeout: Drukarka nie odpowiedziała.'));
-    }, 5000);
-
-    port.on('data', onData);
-    
-    port.write(command, (err) => {
-      if (err) {
-        port.removeListener('data', onData);
-        clearTimeout(timeoutId);
-        return reject(new Error(`Błąd zapisu do portu: ${err.message}`));
-      }
-      console.log('Wysłano polecenie (hex):', command.toString('hex'));
-    });
-  });
-}
-
-// Uproszczona funkcja do wysyłania - teraz wszystkie polecenia przechodzą przez kolejkę
-function sendCommand(command, { expectsResponse = false } = {}) {
-  return new Promise(async (resolve, reject) => {
-      // Dla poleceń bez odpowiedzi, po prostu wysyłamy i kończymy
-      if (!expectsResponse) {
-          port.write(command, (err) => {
-              if (err) return reject(new Error(`Błąd zapisu do portu: ${err.message}`));
-              console.log('Wysłano polecenie (hex):', command.toString('hex'));
-              resolve('Polecenie wysłane pomyślnie.');
-          });
-      } else {
-          // Dla poleceń z odpowiedzią, używamy kolejki
-          commandQueue.push({ command, expectsResponse, resolve, reject });
-          if (!isProcessing) processQueue();
-      }
-  });
-}
-
-// POPRAWKA: Teraz dodajemy też `reject`
-function addDelayToQueue(duration) {
-    return new Promise((resolve, reject) => {
-        commandQueue.push({ type: 'delay', duration, resolve, reject });
-        if (!isProcessing) processQueue();
-    });
+async function getSnapshot() {
+    const hardware = await transport.hardware();
+    const transaction = await transport.enq();
+    // Read Pe before any other framed query can change command diagnostics.
+    const errorText = bodyOf(await transport.request(frame('#n', false), '1#E'), '1#E');
+    if (!/^\d{1,3}$/.test(errorText)) throw new Error('Nieprawidłowy kod błędu drukarki.');
+    const lastErrorCode = Number(errorText);
+    const identity = parseIdentity(await transport.request(frame('2#v', false), '3#R', true));
+    const status = await getParsedStatusInfo();
+    const counter = parseCounter(await transport.request(frame('50#s'), '50#X', true));
+    const clock = parseClock(await transport.request(frame('#c', false), '1#C'));
+    return { hardware, transaction, lastErrorCode, identity, status, counter, clock };
 }
 
 
@@ -239,7 +170,9 @@ async function endFiscalPart({ total, dsp, discount, buyerNip }) {
     const part = Buffer.from(partString, 'binary');
     const checksum = calculateChecksum(part);
     const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
-    return sendCommand(command, { expectsResponse: false });
+    const state = await sendCommand(command, { expectsResponse: false });
+    expectTransaction(state, false, true);
+    return state;
 }
 
 /**
@@ -257,9 +190,8 @@ async function finalizePrintout() {
 /**
  * Główna funkcja sterująca drukowaniem zaawansowanego paragonu.
  */
-async function printAdvancedReceipt({ items, payments = [], discount = null, buyerNip = null }) {
+async function printAdvancedReceipt({ items, payments = [], discount = null, buyerNip = null }, { onFiscalClose = async () => {} } = {}) {
     console.log('--- Rozpoczynanie drukowania ZAAWANSOWANEGO paragonu (metoda dwuetapowa $y + $z) ---');
-    await clearState();
     
     // Krok 1: Start i Pozycje
     await startTransaction();
@@ -303,7 +235,8 @@ async function printAdvancedReceipt({ items, payments = [], discount = null, buy
     // Krok 4: Finalizacja dwuetapowa
     const amountPaid = payments.reduce((sum, p) => sum + p.amount, 0);
     const dsp = finalTotal - amountPaid;
-    await endFiscalPart({ total: finalTotal, dsp, discount, buyerNip });
+    const fiscalState = await endFiscalPart({ total: finalTotal, dsp, discount, buyerNip });
+    await onFiscalClose(fiscalState);
     await finalizePrintout();
     console.log('Krok 4/4: Paragon sfinalizowany (fiskalnie i wydruk).');
     
@@ -326,7 +259,9 @@ async function startTransaction() {
     const part = Buffer.from('0$h', 'binary');
     const checksum = calculateChecksum(part);
     const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
-    return sendCommand(command);
+    const state = await sendCommand(command);
+    expectTransaction(state, true, false);
+    return state;
 }
 
 /**
@@ -378,7 +313,9 @@ async function endTransaction({ amountPaid, total }) {
     const part = Buffer.from(`1;0$e001\r${amountPaid}/${total}/`, 'binary');
     const checksum = calculateChecksum(part);
     const command = Buffer.concat([ Buffer.from('\x1b\x50', 'binary'), part, Buffer.from(checksum, 'binary'), Buffer.from('\x1b\\', 'binary') ]);
-    return sendCommand(command);
+    const state = await sendCommand(command);
+    expectTransaction(state, false, true);
+    return state;
 }
 
 /**
@@ -400,9 +337,8 @@ async function setBuyerNip(nip) {
 }
 
 // Zmodyfikowana funkcja printReceipt
-async function printReceipt({ items, payment, buyerNip }) { // Dodano parametr buyerNip
+async function printReceipt({ items, payment, buyerNip }, { onFiscalClose = async () => {} } = {}) {
     console.log('--- Rozpoczynanie drukowania paragonu ---');
-    await clearState();
     
     await startTransaction();
     console.log('Krok 1/4: Transakcja rozpoczęta.');
@@ -423,7 +359,8 @@ async function printReceipt({ items, payment, buyerNip }) { // Dodano parametr b
     }
 
     const total = calculatedTotal.toFixed(2);
-    await endTransaction({ amountPaid: payment.amountPaid, total });
+    const fiscalState = await endTransaction({ amountPaid: payment.amountPaid, total });
+    await onFiscalClose(fiscalState);
     console.log('Krok 4/4: Transakcja zakończona.');
     
     return { success: true, message: 'Paragon wysłany do drukarki.', total };
@@ -485,8 +422,7 @@ async function printDailyReport({ cashier, cashRegister } = {}) {
         Buffer.from('\x1b\\', 'binary')
     ]);
 
-    // Raport dobowy to długa operacja, nie oczekujemy bezpośredniej odpowiedzi
-    return sendCommand(command, { expectsResponse: false });
+    return sendCommand(command, { report: true });
 }
 
 /**
@@ -521,7 +457,7 @@ async function printPeriodicReport({ startDate, endDate, cashier, cashRegister }
         Buffer.from('\x1b\\', 'binary')
     ]);
 
-    return sendCommand(command, { expectsResponse: false });
+    return sendCommand(command, { report: true });
 }
 
 /**
@@ -565,117 +501,11 @@ async function reprintLastReceipt() {
  * @returns {Promise<number>} Zwraca stan kasy jako liczba.
  */
 async function getCashDrawerState() {
-    console.log('Wysyłanie polecenia odczytu informacji kasowych...');
-    const command = Buffer.from([0x1b, 0x50, 0x23, 0x73, 0x1b, 0x5c]);
-    const rawResponse = await sendCommand(command, { expectsResponse: true });
-
-    try {
-        // Nowa, bezpieczna metoda parsowania
-        const parts = rawResponse.split('/');
-        if (parts.length < 3) { // Muszą być co najmniej 3 części: ... / CASH / num_id
-            throw new Error('Odpowiedź ma nieoczekiwaną strukturę (za mało części).');
-        }
-        
-        // Pole CASH jest zawsze przedostatnie
-        const cashValueString = parts[parts.length - 2].trim();
-        const cashValue = parseFloat(cashValueString);
-
-        if (isNaN(cashValue)) {
-            throw new Error(`Nie udało się sparsować wartości gotówki. Otrzymano: "${cashValueString}"`);
-        }
-        
-        console.log(`Odczytano stan kasy: ${cashValue}`);
-        return cashValue;
-    } catch (error) {
-        console.error('Błąd parsowania odpowiedzi [th_scinfo]:', error);
-        console.error('Surowa odpowiedź, która spowodowała błąd:', rawResponse);
-        throw new Error('Otrzymano nieprawidłowy format odpowiedzi od drukarki.');
-    }
+    return (await getParsedStatusInfo()).cashInDrawer;
 }
 
-
-/**
- * POPRAWIONA WERSJA 3: Odczytuje i PARSUJE informacje kasowe do czytelnego obiektu JSON.
- */
 async function getParsedStatusInfo() {
-    console.log('Wysyłanie polecenia odczytu i parsowania informacji kasowych...');
-    const command = Buffer.from([0x1b, 0x50, 0x23, 0x73, 0x1b, 0x5c]);
-    const rawResponse = await sendCommand(command, { expectsResponse: true });
-
-    try {
-        const cleanResponse = rawResponse.replace(/^.*?#X/, '').replace(/\x1b\\$/, '');
-        const parts = cleanResponse.split('/');
-        
-        if (parts.length < 4) {
-            throw new Error('Odpowiedź ma nieoczekiwaną strukturę.');
-        }
-
-        const flags = parts[0].split(';');
-        
-        let ratesEndIndex = 1;
-        while (parts[ratesEndIndex] && parts[ratesEndIndex].includes('.')) {
-            ratesEndIndex++;
-        }
-
-        const vatRatesRaw = parts.slice(1, ratesEndIndex);
-        const receiptCounter = parseInt(parts[ratesEndIndex], 10);
-        
-        const totalsAndRest = parts.slice(ratesEndIndex + 1);
-        const uniqueId = totalsAndRest.pop();
-        const cashInDrawer = parseFloat(totalsAndRest.pop());
-        const dailyTotalsRaw = totalsAndRest;
-
-        const parseRate = (rateStr) => {
-            if (!rateStr) return 'niezdefiniowana';
-            const val = parseFloat(rateStr);
-            if (val === 100) return "zwolniona";
-            if (val === 101) return "nieaktywna";
-            return val;
-        };
-        
-        // === POPRAWKA TUTAJ ===
-        // Dodajemy .padStart(2, '0'), aby zawsze mieć dwie cyfry roku (np. "0" -> "00")
-        const year = String(flags[6]).padStart(2, '0');
-        const month = String(flags[7]).padStart(2, '0');
-        const day = String(flags[8]).padStart(2, '0');
-        
-        const statusObject = {
-            lastCommandError: parseInt(flags[0], 10),
-            isFiscal: parseInt(flags[1], 10) === 1,
-            isTransactionOpen: parseInt(flags[2], 10) === 1,
-            lastTransactionOk: parseInt(flags[3], 10) === 1,
-            ramResets: parseInt(flags[5], 10),
-            lastWriteDate: `20${year}-${month}-${day}`, // Teraz wynik będzie poprawny: "2000-01-01"
-            vatRates: {
-                A: parseRate(vatRatesRaw[0]),
-                B: parseRate(vatRatesRaw[1]),
-                C: parseRate(vatRatesRaw[2]),
-                D: parseRate(vatRatesRaw[3]),
-                E: parseRate(vatRatesRaw[4]),
-                F: parseRate(vatRatesRaw[5]),
-                G: parseRate(vatRatesRaw[6]),
-            },
-            receiptsSinceDailyReport: receiptCounter,
-            dailyTotals: {
-                A: parseFloat(dailyTotalsRaw[0]) || 0,
-                B: parseFloat(dailyTotalsRaw[1]) || 0,
-                C: parseFloat(dailyTotalsRaw[2]) || 0,
-                D: parseFloat(dailyTotalsRaw[3]) || 0,
-                E: parseFloat(dailyTotalsRaw[4]) || 0,
-                F: parseFloat(dailyTotalsRaw[5]) || 0,
-                G: parseFloat(dailyTotalsRaw[6]) || 0,
-            },
-            cashInDrawer: cashInDrawer,
-            uniqueId: uniqueId,
-        };
-
-        return statusObject;
-
-    } catch (error) {
-        console.error('Błąd parsowania odpowiedzi [th_scinfo]:', error);
-        console.error('Surowa odpowiedź, która spowodowała błąd:', rawResponse);
-        throw new Error('Otrzymano nieprawidłowy format odpowiedzi od drukarki.');
-    }
+    return parseStatus(await transport.request(frame('23#s'), '2#X', true));
 }
 
 /**
@@ -694,17 +524,7 @@ async function openCashDrawer() {
         0x1b, 0x5c  // Terminator: ESC \
     ]);
     
-    // Wysyłamy polecenie bezpośrednio, omijając kolejkę,
-    // ponieważ jest to prosta, niezależna operacja.
-    return new Promise((resolve, reject) => {
-        port.write(command, (err) => {
-            if (err) {
-                return reject(new Error(`Błąd zapisu do portu: ${err.message}`));
-            }
-            console.log('Wysłano polecenie (hex):', command.toString('hex'));
-            resolve('Polecenie otwarcia szuflady wysłane pomyślnie.');
-        });
-    });
+    return sendCommand(command);
 }
 
 async function login(cashier, cashRegister) {
@@ -756,7 +576,13 @@ async function getStatusInfo() {
 
 
 
-module.exports = {
+return {
+  getSnapshot,
+  async printVoidDocument() {
+    await clearState();
+    await startTransaction();
+    return voidCurrentTransaction();
+  },
   login,
   logout,
   cashDeposit,
@@ -778,3 +604,7 @@ module.exports = {
   getParsedStatusInfo,
   openCashDrawer
 };
+
+}
+
+module.exports = { createPrinter };
