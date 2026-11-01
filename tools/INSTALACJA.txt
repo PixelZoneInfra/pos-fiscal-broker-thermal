@@ -1,0 +1,51 @@
+﻿TRZY PRZYCISKI BROKERA — WINDOWS
+
+INSTALACJA JEDNORAZOWA
+1. Dokończ obsługę klienta w POS.
+2. Rozpakuj zawartość ZIP bezpośrednio do OBECNEGO folderu brokera,
+   tego ze start-pos.cmd. Potwierdź zastąpienie plików main.js i start-pos.cmd oraz plików w tools.
+   Nie twórz osobnej nowej instalacji. Nie zmieniaj ustawień.
+3. Kliknij „Uruchom na nowo.vbs”. Jeśli działa jeszcze starsza wersja,
+   przycisk spróbuje pokazać jej schowane okno. Zamknij je krzyżykiem,
+   poczekaj chwilę i ponownie kliknij „Uruchom na nowo.vbs”.
+
+CODZIENNA OBSŁUGA
+Na pulpit utwórz SKRÓTY do VBS. Oryginały zostaw w folderze brokera.
+Uruchom na nowo.vbs — włącza broker, a jeśli już działa, bezpiecznie
+                       zatrzymuje go i włącza ponownie. Działa w tle.
+Sprawdz stan.vbs    — pokazuje stan aplikacji i połączenia z portem.
+                       Nie drukuje i nie sprawdza papieru w drukarce.
+Zamknij.vbs        — kończy pracę po zakończeniu bieżącej operacji.
+
+Zamknij/restart używaj po zakończeniu obsługi klienta w POS.
+W przypadku rezerwacji drukarki przez POS zatrzymanie jest odmawiane.
+Operacja dłuższa niż 3 minuty również powoduje odmowę, bez jej przerwania.
+Restart NIE usuwa niejednoznacznych operacji ani blokad dziennika.
+Zachowaj operations.jsonl. Po awarii operations.lock usuń tylko po
+potwierdzeniu, że wszystkie brokery są zatrzymane i zapisany PID nie działa.
+
+Jeśli start się nie uda, komunikaty znajdziesz w:
+local-results\broker-start.log
+Nie trzeba uruchamiać CMD, instalować pakietów ani zmieniać parametrów.
+start-pos.cmd uruchamia teraz bezpośrednio zainstalowany electron.exe.
+Ustawienia z broker-local.cmd i dotychczasowe tryby POS pozostają te same.
+Nie wykonuje npm start ani instalacji pakietów.
+
+SZYBKIE SPRAWDZENIE NA KOMPUTERZE W LOKALU
+1. Uruchom na nowo → Sprawdz stan: broker odpowiada, port otwarty.
+2. Wykonaj normalną sprzedaż w POS i sprawdź wydruk oraz odpowiedź POS.
+3. Po zakończeniu sprzedaży: Zamknij → Sprawdz stan: wyłączony.
+4. Uruchom na nowo → Sprawdz stan: broker odpowiada, port otwarty.
+
+PAKIET LOKALNY
+Nie zawiera ustawień, danych klientów, node_modules ani zmian protokołu
+Thermal. Nie podmienia żadnego thermal-*.js, api.js ani kodu sprzedaży.
+Weryfikacja automatyczna obejmuje symulator drukarki i HTTP; obsługa
+okien Windows oraz rzeczywisty port USB wymagają powyższego sprawdzenia
+w lokalu. Działanie startu i wznowienia po hibernacji potwierdzono na
+stanowisku użytkownika; pełny dzień pracy jest osobnym odbiorem.
+
+COFNIĘCIE
+Zamknij broker tym przyciskiem. Po potwierdzeniu wyłączenia przywróć
+poprzednie main.js i start-pos.cmd z pobranej wcześniej wersji.
+Dziennik operacji i ustawienia pozostaw na miejscu.

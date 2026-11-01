@@ -2,6 +2,8 @@
 
 **Pierwsze uruchomienie: [START-TUTAJ.md — konkretne kroki bez edytowania plików](START-TUTAJ.md).**
 
+**Codzienna obsługa Windows:** `Uruchom na nowo.vbs`, `Sprawdz stan.vbs`, `Zamknij.vbs`. Broker działa w tle, bez okna CMD i widocznego `index.html`. Na pulpit należy utworzyć skróty do VBS; same pliki zostają w katalogu brokera razem z `tools`. [Instrukcja pracownika i odzyskiwania startu](tools/INSTALACJA.txt).
+
 Lokalny broker Electron/Express dla Posnet Thermal XL2 Online. API działa na `127.0.0.1:3030`, domyślny port drukarki pozostaje `COM3`, 115200/8/N/1. Jeśli lokalna działająca instalacja ma inny port, można go wskazać przez `FISCAL_SERIAL_PORT`, bez edycji komend. Kodowanie, komendy pozycji, rabaty, VAT i płatności zachowują dotychczasowy format.
 
 Ta zmiana przygotowuje urządzenie do przyszłej kolejki online. Nie zawiera odbiorcy kolejki, połączeń do baz, płatności, KSeF, poczty ani operacji magazynowych. Uruchomienie wersji testowej na stanowisku wymaga przejścia [procedury sprzętowej](docs/hardware-verification.md).
@@ -19,6 +21,18 @@ npm start
 ```
 
 Testy używają `node:test`, prawdziwego API HTTP i symulowanego portu; nie importują Electron/SerialPort i niczego nie drukują. CI uruchamia je na Node 20 w Windows i Linux, z `npm ci --ignore-scripts` (testy nie wymagają binariów Electron ani natywnego portu).
+
+## Uruchamianie w tle i zatrzymywanie
+
+`Uruchom na nowo.vbs` włącza broker albo najpierw zatrzymuje własną działającą instancję. Wykorzystuje `start-pos.cmd`, który wczytuje istniejący `broker-local.cmd` i uruchamia zainstalowany `node_modules\electron\dist\electron.exe` bez pośredniego `npm start`. Tryb obecnego POS pozostaje: diagnostyka=false, online=false, obowiązek rezerwacji=false. Log startu i działania trafia do ignorowanego `local-results\broker-start.log`. Wcześniejsze zakończenie procesu jest zgłaszane bez czekania pełnych 45 sekund.
+
+`Sprawdz stan.vbs` odczytuje tylko metadane HTTP: działanie brokera, otwarcie portu, zapamiętany błąd połączenia, bieżącą operację i blokady dziennika. Nie odpytuje USB, nie drukuje i nie potwierdza stanu papieru.
+
+`Zamknij.vbs` blokuje przyjmowanie nowych żądań urządzenia, czeka na przyjęte żądania i całą bieżącą operację, zamyka dziennik oraz port, a następnie kończy Electron. Aktywna niewykorzystana rezerwacja POS lub oczekiwanie ponad trzy minuty powodują odmowę zatrzymania. Przyciski nie używają `taskkill`, nie usuwają dziennika ani stanów `unknown`. Zamknięcie i restart wykonywać po zakończeniu obsługi klienta w POS; broker nie widzi etapu zapisu rachunku w bazie starego klienta.
+
+Lokalne `POST /broker/control/stop` wymaga losowego tokenu z ignorowanego `local-results/broker-control.json`, adresu loopback i braku nagłówka `Origin`. Token nie trafia do publicznego statusu. Klient sprawdza identyfikator instancji i katalog, aby nie zatrzymać brokera z innej instalacji. `/broker/status` otrzymuje dodatkowe metadane `local_control`; katalog dotychczasowych API POS pozostaje bez zmian.
+
+Broker nie ma automatycznego ponownego otwierania USB po hibernacji. Po wybudzeniu można wykonać restart przyciskiem, sprawdzić stan i komunikację przez POS. Poprawne wznowienie nie wymaga usuwania blokady dziennika. Po awarii plik `operations.lock` usuwa się wyłącznie po potwierdzeniu braku wszystkich procesów brokera i PID wskazanego w pliku; `operations.jsonl` zostaje zachowany. Sam restart nie rozstrzyga przerwanego paragonu.
 
 ## Wyłączność i wynik
 

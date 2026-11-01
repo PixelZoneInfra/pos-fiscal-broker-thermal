@@ -2,6 +2,8 @@
 
 **Pierwsze uruchomienie bez edytowania plików: [START-TUTAJ.md](../START-TUTAJ.md).** Poniżej jest pełny techniczny plan odbioru API; nie wszystkie jego kroki są wymagane do pierwszego odczytu drukarki i testu obecnego POS.
 
+**Obsługa wersji v2:** okno `index.html` jest ukryte również w trybach diagnostycznych. Do zatrzymywania służy `Zamknij.vbs`; samo zamknięcie CMD nie jest potwierdzeniem zatrzymania brokera. `Uruchom na nowo.vbs` zawsze włącza tryb obecnego POS, więc nie zastępuje startu trybu diagnostycznego ani testu rezerwacji. Skróty VBS można umieścić na pulpicie, pozostawiając oryginały i `tools` w katalogu instalacji. [Instrukcja codzienna](../tools/INSTALACJA.txt).
+
 Wersja obejmuje fundament z PR #2 oraz kolejny PR rezerwacji. Pobieramy **cały końcowy branch** `feature/fiscal-reservations-and-regression-20261101`, nie stare `main` i nie dwa wybrane pliki. Nowy PR jest skierowany do `feature/fiscal-safety-stage-1-20261101`; po ewentualnym scaleniu do tego brancha zawiera on oba etapy. Samo otwarcie/scalenie PR nie instaluje brokera na komputerze.
 
 Cel sesji: sprawdzić komunikację XL2, wszystkie polecenia dostępne z POS, nowy kontrakt rezerwacji i zgodność dotychczasowego POS. Odbiorca kolejki, kod POS, centralna baza, płatności, faktury i poczta nie są wdrażane tym pakietem. Rzeczywiste wydruki/operacje kasowe operator wykonuje dopiero dla uzgodnionych transakcji. Zapis JSON z testów nie zastępuje oceny wydruku.
@@ -77,7 +79,7 @@ To GET metadanych; token `probe` nie wykonuje ani nie rezerwuje urządzenia. Bł
 
 ## 3. Rezerwacja bez wydruku
 
-Zamknąć okno Electron nowego brokera, poczekać na zakończenie procesu i uruchomić:
+Kliknąć `Zamknij.vbs`, poczekać na potwierdzenie wyłączenia i uruchomić:
 
 ```bat
 start-reservation-test.cmd
