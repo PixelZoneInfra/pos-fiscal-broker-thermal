@@ -17,17 +17,21 @@ if (!app.requestSingleInstanceLock()) {
 
     journal = new OperationJournal(path.join(app.getPath('userData'), 'fiscal-operations'));
     const port = new SerialPort({
-      path: 'COM3', baudRate: 115200, dataBits: 8, stopBits: 1, parity: 'none', autoOpen: false,
+      path: process.env.FISCAL_SERIAL_PORT || 'COM3', baudRate: 115200, dataBits: 8, stopBits: 1, parity: 'none', autoOpen: false,
     });
     const transport = new ThermalTransport(port);
     const printer = new BrokerService(createPrinter(transport), journal, {
       onlineEnabled: process.env.FISCAL_ONLINE_ENABLED === 'true',
+      diagnosticsOnly: process.env.FISCAL_DIAGNOSTICS_ONLY === 'true',
+      requirePosReservation: process.env.FISCAL_REQUIRE_POS_RESERVATION === 'true',
+      allowedOrigins: (process.env.FISCAL_ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean),
+      serialPort: port.path,
       branchId: Number(process.env.FISCAL_BRANCH_ID),
       environment: process.env.FISCAL_ENVIRONMENT,
       printerUniqueNumber: process.env.FISCAL_PRINTER_UNIQUE_NUMBER,
     });
     port.open(error => {
-      if (error) console.error('Błąd otwarcia COM3:', error.message);
+      if (error) console.error(`Błąd otwarcia ${port.path}:`, error.message);
     });
     server = createApi(printer).listen(3030, '127.0.0.1', () => {
       console.log('API: http://127.0.0.1:3030; dziennik:', path.join(app.getPath('userData'), 'fiscal-operations'));

@@ -1,15 +1,9 @@
 const { randomUUID } = require('node:crypto');
 const { hash } = require('./operation-journal');
+const { PrinterReservations, COMMANDS, publicReservation, problem, ttl } = require('./printer-reservations');
 
 const READS = new Set(['getStatusInfo', 'getParsedStatusInfo', 'getCashDrawerState', 'getSnapshot']);
 const RECEIPTS = new Set(['printReceipt', 'printAdvancedReceipt']);
-const MUTATIONS = ['login', 'logout', 'cashDeposit', 'cashWithdrawal', 'getCashDrawerStateReport',
-  'printDailyReport', 'printPeriodicReport', 'printVoidDocument', 'printTestVoidReceipt',
-  'reprintLastReceipt', 'openCashDrawer'];
-
-function problem(code, message, statusCode = 409) {
-  return Object.assign(new Error(message), { code, statusCode });
-}
 
 function validateId(id) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9._:-]{1,120}$/.test(id)) throw problem('INVALID_ID', 'Nieprawidłowy operation_id.', 400);
@@ -51,6 +45,7 @@ function validateMutation(name, args) {
     if (value && typeof value === 'object') Object.values(value).forEach(visit);
   };
   visit(args);
+  if (name === 'printTestVoidReceipt') validateReceipt({ ...args[0], payments: [{ type: 'CASH', amount: 0 }] }, true);
   if (['cashDeposit', 'cashWithdrawal'].includes(name) &&
     (!/^\d+(\.\d{1,2})?$/.test(String(args[0])) || !Number.isFinite(Number(args[0])) || Number(args[0]) <= 0)) {
     throw problem('INVALID_DATA', 'Nieprawidłowa kwota.', 400);
@@ -80,32 +75,90 @@ class BrokerService {
     this.journal = journal;
     this.config = config;
     this.busy = null;
+    this.reservations = new PrinterReservations(journal, config.now);
     for (const name of READS) this[name] = (...args) => this.exclusive(name, () => printer[name](...args));
-    for (const name of [...RECEIPTS, ...MUTATIONS]) {
+    for (const [name, spec] of Object.entries(COMMANDS)) {
       this[name] = (...args) => {
-        const options = RECEIPTS.has(name) ? args[1] || {} : {};
-        return this.execute(name, RECEIPTS.has(name) ? [args[0]] : args, options.operationId);
+        const options = args[spec.arity] || {};
+        return this.execute(name, args.slice(0, spec.arity), options.operationId, null, options.reservationToken);
       };
     }
   }
 
   status() {
-    return { busy: this.busy, journalHealthy: this.journal.healthy, blockedOperations: this.journal.blocked(),
+    return { api_version: 2, busy: this.busy, journalHealthy: this.journal.healthy, blockedOperations: this.journal.blocked(),
+      serialPort: this.config.serialPort || null,
+      reservation: publicReservation(this.reservations.active()),
+      diagnosticsOnly: this.config.diagnosticsOnly === true,
+      posReservationRequired: this.config.requirePosReservation === true,
+      capabilities: { reservations: true, durableOperations: true },
       onlineOperationsEnabled: this.config.onlineEnabled === true,
       branch_id: this.config.branchId || null, environment: this.config.environment || null,
       printer_unique_number: this.config.printerUniqueNumber || null };
   }
 
-  async exclusive(label, run) {
+  async exclusive(label, run, access = {}) {
     if (this.busy) throw problem('PRINTER_BUSY', 'Drukarka wykonuje inną operację.');
+    this.reservations.authorize(access.token, access.operationId, access.command);
     this.busy = label;
     try { return await run(); } finally { this.busy = null; }
   }
 
-  getOperation(id) { validateId(id); return this.journal.get(id); }
+  getOperation(id) {
+    validateId(id);
+    const record = this.journal.get(id);
+    return record?.kind === 'printer_reservation' ? null : record;
+  }
+
+  assertWritable() {
+    if (this.config.diagnosticsOnly) throw problem('DIAGNOSTICS_ONLY', 'Tryb diagnostyczny blokuje polecenia zmieniające stan drukarki.', 503);
+    if (this.busy) throw problem('PRINTER_BUSY', 'Drukarka wykonuje inną operację.');
+    if (!this.journal.healthy || this.journal.blocked().length) {
+      throw problem('REVIEW_REQUIRED', 'Poprzednia operacja wymaga weryfikacji. Drukowanie jest zablokowane.');
+    }
+  }
+
+  validateDevice(snapshot, expectedIdentity) {
+    if (!snapshot.transaction.fiscal || !snapshot.status.isFiscal) throw new Error('Drukarka nie jest w trybie fiskalnym.');
+    if (snapshot.transaction.transactionOpen || snapshot.status.isTransactionOpen) throw new Error('Drukarka ma otwartą transakcję; nie zostanie automatycznie anulowana.');
+    if (snapshot.status.lastCommandError) throw new Error(`Drukarka zgłasza poprzedni błąd ${snapshot.status.lastCommandError}.`);
+    if (expectedIdentity && snapshot.identity.uniqueNumber !== expectedIdentity) throw new Error('Podłączono inną drukarkę fiskalną.');
+  }
+
+  async reservePrinter(request) {
+    this.assertWritable();
+    validateId(request?.operation_id);
+    if (request.operation_id.startsWith('reservation:')) throw problem('INVALID_ID', 'Zastrzeżony prefiks identyfikatora.', 400);
+    const spec = Object.entries(COMMANDS).find(([, value]) => value.command === request.command);
+    if (!spec) throw problem('INVALID_COMMAND', 'Nieznane polecenie rezerwacji.', 400);
+    ttl(request.ttl_ms);
+    const existing = this.journal.get(request.operation_id);
+    if (existing && (existing.kind !== spec[0] || existing.state !== 'not_started')) {
+      throw problem('OPERATION_ALREADY_RECORDED', 'Operacja ma zapisany wynik. Odczytaj /operations/:id przed dalszym działaniem.');
+    }
+    return this.exclusive(`reserve:${request.operation_id}`, async () => {
+      const before = await this.raw.getSnapshot();
+      this.validateDevice(before, this.config.printerUniqueNumber);
+      return this.reservations.create(request.operation_id, request.command, before.identity.uniqueNumber, request.ttl_ms);
+    });
+  }
+
+  getReservation(id) { validateId(id); return publicReservation(this.reservations.get(id)); }
+
+  renewReservation(id, token, ttlMs) {
+    this.assertWritable();
+    if (this.busy) throw problem('PRINTER_BUSY', 'Drukarka wykonuje inną operację.');
+    return this.reservations.renew(id, token, ttlMs);
+  }
+
+  releaseReservation(id, token) {
+    if (this.busy) throw problem('PRINTER_BUSY', 'Drukarka wykonuje inną operację.');
+    return this.reservations.release(id, token);
+  }
 
   async submitReceipt(request) {
     if (!this.config.onlineEnabled) throw problem('ONLINE_DISABLED', 'Zlecenia online są wyłączone.', 503);
+    if (!this.config.requirePosReservation) throw problem('POS_RESERVATION_NOT_REQUIRED', 'Przed zleceniami online włącz obowiązek rezerwacji dla POS.', 503);
     if (!request || typeof request !== 'object') throw problem('INVALID_DATA', 'Brak danych zlecenia.', 400);
     if (!Number.isInteger(this.config.branchId) || this.config.branchId < 1 || !this.config.environment || !this.config.printerUniqueNumber) {
       throw problem('DEVICE_NOT_CONFIGURED', 'Brak pełnego przypisania stanowiska.', 503);
@@ -120,9 +173,10 @@ class BrokerService {
     });
   }
 
-  async execute(name, args, suppliedId, assignment = null) {
+  async execute(name, args, suppliedId, assignment = null, reservationToken) {
     const id = suppliedId === undefined ? `local:${randomUUID()}` : suppliedId;
     validateId(id);
+    if (id.startsWith('reservation:')) throw problem('INVALID_ID', 'Zastrzeżony prefiks identyfikatora.', 400);
     if (RECEIPTS.has(name)) validateReceipt(args[0], name === 'printAdvancedReceipt');
     else validateMutation(name, args);
     const payloadHash = hash({ name, args, assignment });
@@ -130,19 +184,24 @@ class BrokerService {
     if (previous && previous.payloadHash !== payloadHash) throw problem('OPERATION_CONFLICT', 'Ten operation_id ma inną treść.');
     // A known result (including unknown) is a read, never another fiscal attempt.
     if (previous && previous.state !== 'not_started') return outcome(previous);
+    this.assertWritable();
+    if (!assignment && this.config.requirePosReservation && reservationToken === undefined) {
+      throw problem('RESERVATION_REQUIRED', 'Najpierw zarezerwuj drukarkę dla tej operacji POS.');
+    }
+    if (reservationToken !== undefined && suppliedId === undefined) throw problem('OPERATION_ID_REQUIRED', 'Rezerwacja wymaga X-Operation-Id.', 400);
+    const command = COMMANDS[name].command;
     return this.exclusive(id, async () => {
-      if (!this.journal.healthy || this.journal.blocked().length) {
-        throw problem('REVIEW_REQUIRED', 'Poprzednia operacja wymaga weryfikacji. Drukowanie jest zablokowane.');
-      }
+      const reservation = this.reservations.authorize(reservationToken, id, command);
       let record = this.journal.save(previous || { id, kind: name, payloadHash, assignment, state: 'not_started', createdAt: new Date().toISOString() });
       let intentSaved = false;
       try {
+        if (reservation) {
+          this.reservations.consume(reservation);
+          record = this.journal.save({ ...record, reservationId: reservation.id });
+        }
         const before = await this.raw.getSnapshot();
-        if (!before.transaction.fiscal || !before.status.isFiscal) throw new Error('Drukarka nie jest w trybie fiskalnym.');
-        if (before.transaction.transactionOpen || before.status.isTransactionOpen) throw new Error('Drukarka ma otwartą transakcję; nie zostanie automatycznie anulowana.');
-        if (before.status.lastCommandError) throw new Error(`Drukarka zgłasza poprzedni błąd ${before.status.lastCommandError}.`);
-        const expectedIdentity = assignment?.printerUniqueNumber || this.config.printerUniqueNumber;
-        if (expectedIdentity && before.identity.uniqueNumber !== expectedIdentity) throw new Error('Podłączono inną drukarkę fiskalną.');
+        const expectedIdentity = reservation?.printerUniqueNumber || assignment?.printerUniqueNumber || this.config.printerUniqueNumber;
+        this.validateDevice(before, expectedIdentity);
         // Must reach durable storage BEFORE the first mutation on the device.
         record = this.journal.save({ ...record, before, state: 'in_progress', error: undefined });
         intentSaved = true;
@@ -179,13 +238,13 @@ class BrokerService {
         }
         throw Object.assign(error, { operation: outcome({ ...record, state: intentSaved ? 'unknown' : 'not_started', error: error.message }), statusCode: 503 });
       }
-    });
+    }, { token: reservationToken, operationId: id, command });
   }
 
   async reconcile(id) {
     validateId(id);
     return this.exclusive(`review:${id}`, async () => {
-      const record = this.journal.get(id);
+      const record = this.getOperation(id);
       if (!record) throw problem('NOT_FOUND', 'Nieznana operacja.', 404);
       // Evidence only. TRF alone cannot attribute a receipt to this operation.
       const evidence = await this.raw.getSnapshot();

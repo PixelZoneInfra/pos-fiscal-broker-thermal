@@ -71,6 +71,7 @@ class OperationJournal {
   }
 
   get(id) { return this.records.get(id) ? structuredClone(this.records.get(id)) : null; }
+  all() { return [...this.records.values()].map(record => structuredClone(record)); }
   blocked() { return [...this.records.values()].filter(r => r.state === 'unknown' || r.state === 'in_progress').map(r => r.id); }
 
   save(record) {

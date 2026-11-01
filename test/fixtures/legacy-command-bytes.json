@@ -1,0 +1,282 @@
+{
+  "sourceCommit": "bff216b739a14089422d9fbb6ea8118f72e3cb79",
+  "sourceFile": "thermal-printer.js",
+  "clock": "2026-11-01 12:00:00 UTC",
+  "cases": [
+    {
+      "name": "simple",
+      "method": "printReceipt",
+      "args": [
+        {
+          "items": [
+            {
+              "name": "Zażółć gęślą jaźń",
+              "quantity": 2,
+              "unitPrice": 12.34,
+              "vatRate": "B"
+            }
+          ],
+          "payment": {
+            "amountPaid": "24.68"
+          },
+          "buyerNip": "1234567890"
+        }
+      ],
+      "removedInitialCancel": true,
+      "frames": [
+        "1b5030246538451b5c",
+        "1b5030246838331b5c",
+        "1b5031244e313233343536373839300d41381b5c",
+        "1b5031246c5a617cf342072067195b6c05206a617a440d320d422f31322e33342f32342e36382f35441b5c",
+        "1b50313b3024653030310d32342e36382f32342e36382f42381b5c"
+      ]
+    },
+    {
+      "name": "advanced",
+      "method": "printAdvancedReceipt",
+      "args": [
+        {
+          "items": [
+            {
+              "name": "Zażółć gęślą jaźń",
+              "quantity": 2,
+              "unitPrice": 12.34,
+              "vatRate": "B"
+            }
+          ],
+          "payments": [
+            {
+              "type": "CARD",
+              "amount": 24.68,
+              "name": "PayU"
+            }
+          ],
+          "buyerNip": "1234567890"
+        }
+      ],
+      "removedInitialCancel": true,
+      "frames": [
+        "1b5030246538451b5c",
+        "1b5030246838331b5c",
+        "1b5031244e313233343536373839300d41381b5c",
+        "1b5031246c5a617cf342072067195b6c05206a617a440d320d422f31322e33342f32342e36382f35441b5c",
+        "1b50313b31246232342e36382f506179550d39421b5c",
+        "1b50303b333b303b303b303b303b303b313b303b303b303b3024794b61736120310d4b61736a65720d313233343536373839300d32342e36382f302e30302f302e30302f302e30302f302e30302f39331b5c",
+        "1b5032383b30247a41301b5c"
+      ]
+    },
+    {
+      "name": "line-amount-global-percent",
+      "method": "printAdvancedReceipt",
+      "args": [
+        {
+          "items": [
+            {
+              "name": "Zażółć gęślą jaźń",
+              "quantity": 2,
+              "unitPrice": 12.34,
+              "vatRate": "B",
+              "discount": {
+                "type": "AMOUNT",
+                "value": 2.34,
+                "description": "Rabat ą"
+              }
+            }
+          ],
+          "payments": [
+            {
+              "type": "CASH",
+              "amount": 10
+            },
+            {
+              "type": "BON",
+              "amount": 10.106
+            }
+          ],
+          "discount": {
+            "type": "PERCENT",
+            "value": 10,
+            "description": "Promocja ł"
+          }
+        }
+      ],
+      "removedInitialCancel": true,
+      "frames": [
+        "1b5030246538451b5c",
+        "1b5030246838331b5c",
+        "1b50313b313b3136246c5a617cf342072067195b6c05206a617a440d320d422f31322e33342f32342e36382f322e33342f526162617420050d33331b5c",
+        "1b50313b3136245932322e33342f31302e30302f50726f6d6f636a6120420d43311b5c",
+        "1b50313b30246231302e30302f434153480d39371b5c",
+        "1b50313b33246231302e31312f424f4e0d43451b5c",
+        "1b50303b333b303b303b303b303b303b303b303b303b303b3024794b61736120310d4b61736a65720d0d32302e31312f302e30302f302e30302f302e30302f302e30302f39391b5c",
+        "1b5032383b30247a41301b5c"
+      ]
+    },
+    {
+      "name": "line-percent-global-amount",
+      "method": "printAdvancedReceipt",
+      "args": [
+        {
+          "items": [
+            {
+              "name": "Zażółć gęślą jaźń",
+              "quantity": 2,
+              "unitPrice": 12.34,
+              "vatRate": "B",
+              "discount": {
+                "type": "PERCENT",
+                "value": 20
+              }
+            }
+          ],
+          "payments": [
+            {
+              "type": "CARD",
+              "amount": 18.744
+            }
+          ],
+          "discount": {
+            "type": "AMOUNT",
+            "value": 1
+          }
+        }
+      ],
+      "removedInitialCancel": true,
+      "frames": [
+        "1b5030246538451b5c",
+        "1b5030246838331b5c",
+        "1b50313b323b3136246c5a617cf342072067195b6c05206a617a440d320d422f31322e33342f32342e36382f32302e30302f52616261740d32321b5c",
+        "1b50333b3136245931392e37342f312e30302f52616261740d46451b5c",
+        "1b50313b31246231382e37342f434152440d39301b5c",
+        "1b50303b333b303b303b303b303b303b303b303b303b303b3024794b61736120310d4b61736a65720d0d31382e37342f302e30302f302e30302f302e30302f302e30302f39311b5c",
+        "1b5032383b30247a41301b5c"
+      ]
+    },
+    {
+      "name": "login",
+      "method": "login",
+      "args": [
+        "Kasjer Żółć",
+        "Kasa 1"
+      ],
+      "removedInitialCancel": false,
+      "frames": [
+        "1b503023704b61736a6572207bf342070d4b61736120310d37431b5c"
+      ]
+    },
+    {
+      "name": "logout",
+      "method": "logout",
+      "args": [
+        "Kasjer Żółć",
+        "Kasa 1"
+      ],
+      "removedInitialCancel": false,
+      "frames": [
+        "1b503023714b61736a6572207bf342070d4b61736120310d37441b5c"
+      ]
+    },
+    {
+      "name": "deposit",
+      "method": "cashDeposit",
+      "args": [
+        100.5
+      ],
+      "removedInitialCancel": false,
+      "frames": [
+        "1b503023693130302e352f38301b5c"
+      ]
+    },
+    {
+      "name": "withdrawal",
+      "method": "cashWithdrawal",
+      "args": [
+        20.25
+      ],
+      "removedInitialCancel": false,
+      "frames": [
+        "1b5030236432302e32352f38431b5c"
+      ]
+    },
+    {
+      "name": "cash-report",
+      "method": "getCashDrawerStateReport",
+      "args": [],
+      "removedInitialCancel": false,
+      "frames": [
+        "1b5030237439381b5c"
+      ]
+    },
+    {
+      "name": "drawer",
+      "method": "openCashDrawer",
+      "args": [],
+      "removedInitialCancel": false,
+      "frames": [
+        "1b503124641b5c"
+      ]
+    },
+    {
+      "name": "daily-report",
+      "method": "printDailyReport",
+      "args": [
+        {
+          "cashier": "Kasjer",
+          "cashRegister": "Kasa 1"
+        }
+      ],
+      "removedInitialCancel": false,
+      "frames": [
+        "1b50313b32363b31313b3123724b61736120310d4b61736a65720d39431b5c"
+      ]
+    },
+    {
+      "name": "periodic-report",
+      "method": "printPeriodicReport",
+      "args": [
+        {
+          "startDate": "2026-10-01",
+          "endDate": "2026-11-01",
+          "cashier": "Kasjer",
+          "cashRegister": "Kasa 1"
+        }
+      ],
+      "removedInitialCancel": false,
+      "frames": [
+        "1b5032363b31303b313b32363b31313b313b30236f4b61736120310d4b61736a65720d38461b5c"
+      ]
+    },
+    {
+      "name": "void-receipt",
+      "method": "printTestVoidReceipt",
+      "args": [
+        {
+          "items": [
+            {
+              "name": "Zażółć gęślą jaźń",
+              "quantity": 2,
+              "unitPrice": 12.34,
+              "vatRate": "B"
+            }
+          ]
+        }
+      ],
+      "removedInitialCancel": false,
+      "frames": [
+        "1b5030246538451b5c",
+        "1b5030246838331b5c",
+        "1b5031246c5a617cf342072067195b6c05206a617a440d320d422f31322e33342f32342e36382f35441b5c",
+        "1b5030246538451b5c"
+      ]
+    },
+    {
+      "name": "reprint",
+      "method": "reprintLastReceipt",
+      "args": [],
+      "removedInitialCancel": false,
+      "frames": [
+        "1b5031234841351b5c"
+      ]
+    }
+  ]
+}

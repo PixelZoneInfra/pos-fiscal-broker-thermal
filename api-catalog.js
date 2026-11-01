@@ -1,0 +1,31 @@
+// Explicit effects matter: GET /cash/report PRINTS. Never batch endpoints by HTTP method.
+const API_CASES = [
+  { id: 'broker-status', method: 'GET', path: '/broker/status', effect: 'read' },
+  { id: 'status', method: 'GET', path: '/status', effect: 'read' },
+  { id: 'status-parsed', method: 'GET', path: '/status/parsed', effect: 'read' },
+  { id: 'cash-state', method: 'GET', path: '/cash/state', effect: 'read' },
+  { id: 'diagnostics', method: 'GET', path: '/device/diagnostics', effect: 'read' },
+  { id: 'receipt', method: 'POST', path: '/transaction/receipt', effect: 'fiscal', command: 'receipt', body: true },
+  { id: 'receipt-advanced', method: 'POST', path: '/transaction/receipt-advanced', effect: 'fiscal', command: 'receipt-advanced', body: true },
+  { id: 'cashier-login', method: 'POST', path: '/cashier/login', effect: 'device', command: 'cashier-login', body: true },
+  { id: 'cashier-logout', method: 'POST', path: '/cashier/logout', effect: 'device', command: 'cashier-logout', body: true },
+  { id: 'cash-deposit', method: 'POST', path: '/cash/deposit', effect: 'cash', command: 'cash-deposit', body: true },
+  { id: 'cash-withdraw', method: 'POST', path: '/cash/withdraw', effect: 'cash', command: 'cash-withdraw', body: true },
+  { id: 'cash-report', method: 'GET', path: '/cash/report', effect: 'device', command: 'cash-report' },
+  { id: 'drawer-open', method: 'POST', path: '/cash-drawer/open', effect: 'device', command: 'drawer-open' },
+  { id: 'void-document', method: 'POST', path: '/transaction/void', effect: 'device', command: 'void-document' },
+  { id: 'reprint-last', method: 'POST', path: '/transaction/reprint-last', effect: 'device', command: 'reprint-last' },
+  { id: 'daily-report', method: 'POST', path: '/reports/daily', effect: 'daily', command: 'daily-report' },
+  { id: 'periodic-report', method: 'POST', path: '/reports/periodic', effect: 'device', command: 'periodic-report', body: true },
+  { id: 'void-receipt', method: 'POST', path: '/test/void-receipt', effect: 'device', command: 'void-receipt', body: true },
+  { id: 'break-printer-disabled', method: 'POST', path: '/test/break-printer', effect: 'disabled' },
+  { id: 'online-receipt', method: 'POST', path: '/operations/receipt', effect: 'fiscal', body: true },
+  { id: 'operation', method: 'GET', path: '/operations/:id', effect: 'read' },
+  { id: 'reconcile', method: 'POST', path: '/operations/:id/reconcile', effect: 'evidence' },
+  { id: 'reservation-create', method: 'POST', path: '/printer/reservations', effect: 'reservation', body: true },
+  { id: 'reservation', method: 'GET', path: '/printer/reservations/:id', effect: 'read' },
+  { id: 'reservation-renew', method: 'POST', path: '/printer/reservations/:id/renew', effect: 'reservation' },
+  { id: 'reservation-release', method: 'POST', path: '/printer/reservations/:id/release', effect: 'reservation' },
+];
+
+module.exports = { API_CASES };

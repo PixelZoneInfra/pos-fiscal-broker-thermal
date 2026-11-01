@@ -52,7 +52,7 @@ test('new HTTP contract is off by default, validates assignment, and returns the
   const { request, broker, port } = await api(t);
   const data = { operation_id: 'http:online', branch_id: 1, environment: 'test', printer_unique_number: port.uniqueNumber, receipt };
   assert.equal((await request('/operations/receipt', data)).status, 503);
-  Object.assign(broker.config, { onlineEnabled: true, branchId: 1, environment: 'test', printerUniqueNumber: port.uniqueNumber });
+  Object.assign(broker.config, { onlineEnabled: true, requirePosReservation: true, branchId: 1, environment: 'test', printerUniqueNumber: port.uniqueNumber });
   assert.equal((await request('/operations/receipt', { ...data, branch_id: 2 })).status, 409);
   const printed = await request('/operations/receipt', data);
   assert.equal(printed.body.state, 'fiscal_confirmed');
