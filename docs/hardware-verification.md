@@ -2,6 +2,8 @@
 
 Status początkowy: przygotowano kod i testy symulacyjne; **brak testu z fizyczną drukarką**. Ta procedura nie jest dowodem wykonania. Prawdziwą transakcję fiskalną, kwotę i sposób jej ujęcia należy uzgodnić przed próbą.
 
+Kompletny pakiet z rezerwacjami: **[plan Windows i regresji każdego API](windows-rollout-and-regression.md)**, [kontrakt rezerwacji](pos-reservation-contract.md), [protokół wyników](regression-results-template.md). Poniższe punkty pozostają skrótem kontroli urządzenia.
+
 ## Przygotowanie
 
 1. Zapisać wersję obecnie uruchamianego brokera, lokalizację i sposób uruchomienia. Zachować działający katalog/instalator. Nie zakładać, że odpowiada bieżącemu `main`.
@@ -51,4 +53,4 @@ Wyniki uzupełnić w Issue #1/PR: wersja brokera, model/firmware, daty, obserwow
 
 ## Dalsza integracja
 
-Po zaliczeniu testu sprzętu potrzebny jest osobny PR POS: rezerwacja drukarki przed zapisem sprzedaży, stabilne ID, obsługa `busy`/`unknown`, jeden odbiorca na stanowisku i pierwszeństwo kasjera. Dopiero potem centralna kolejka może korzystać z nowego endpointu. Kolejka, KSeF i poczta nie należą do tego wdrożenia.
+Broker dostarcza już API rezerwacji. Po zaliczeniu testu sprzętu potrzebny jest osobny PR POS korzystający z niego przed zapisem sprzedaży: stabilne ID i idempotencja zapisu bazy, odnowienia/release, obsługa `busy`/`unknown`, jeden odbiorca na stanowisku i pierwszeństwo kasjera. Dopiero potem centralna kolejka może korzystać z nowego endpointu. Kolejka, KSeF i poczta nie należą do tego wdrożenia.

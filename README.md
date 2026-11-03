@@ -1,8 +1,16 @@
 # POSNET Thermal broker — wersja do weryfikacji
 
-Lokalny broker Electron/Express dla Posnet Thermal XL2 Online. API działa na `127.0.0.1:3030`, port drukarki pozostaje `COM3`, 115200/8/N/1. Kodowanie, komendy pozycji, rabaty, VAT i płatności zachowują dotychczasowy format.
+**Pierwsze uruchomienie: [START-TUTAJ.md — konkretne kroki bez edytowania plików](START-TUTAJ.md).**
+
+**Codzienna obsługa Windows:** `Uruchom na nowo.vbs`, `Sprawdz stan.vbs`, `Zamknij.vbs`. Broker działa w tle, bez okna CMD i widocznego `index.html`. Na pulpit należy utworzyć skróty do VBS; same pliki zostają w katalogu brokera razem z `tools`. [Instrukcja pracownika i odzyskiwania startu](tools/INSTALACJA.txt).
+
+Lokalny broker Electron/Express dla Posnet Thermal XL2 Online. API działa na `127.0.0.1:3030`, domyślny port drukarki pozostaje `COM3`, 115200/8/N/1. Jeśli lokalna działająca instalacja ma inny port, można go wskazać przez `FISCAL_SERIAL_PORT`, bez edycji komend. Kodowanie, komendy pozycji, rabaty, VAT i płatności zachowują dotychczasowy format.
 
 Ta zmiana przygotowuje urządzenie do przyszłej kolejki online. Nie zawiera odbiorcy kolejki, połączeń do baz, płatności, KSeF, poczty ani operacji magazynowych. Uruchomienie wersji testowej na stanowisku wymaga przejścia [procedury sprzętowej](docs/hardware-verification.md).
+
+**Windows: [pełny plan wdrożenia, regresji wszystkich API i powrotu do starej wersji](docs/windows-rollout-and-regression.md).** Pierwsze uruchomienie przez `start-diagnostics.cmd`; po kontroli tryb obecnego POS przez `start-pos.cmd`. Test tokenów przez `start-reservation-test.cmd` przy zamkniętym obecnym POS. [Kontrakt rezerwacji przed zapisem sprzedaży](docs/pos-reservation-contract.md) oraz [protokół wyników](docs/regression-results-template.md) są częścią pakietu.
+
+Lokalne ustawienia przeglądarki/urządzenia można zachować w ignorowanym `broker-local.cmd` (wzór `broker-local.example.cmd`). `FISCAL_ALLOWED_ORIGINS` to dokładne originy POS, bez ścieżki i końcowego `/`, rozdzielone przecinkami. Po skonfigurowaniu dozwolony POS otrzymuje CORS/OPTIONS dla JSON oraz nagłówków ID/token; obcy origin jest odrzucany przed komendami. Bez konfiguracji zachowano poprzednie zachowanie HTTP bez CORS. Ten parametr nie zmienia kodowania ani komend urządzenia.
 
 ## Uruchomienie i testy
 
@@ -14,9 +22,21 @@ npm start
 
 Testy używają `node:test`, prawdziwego API HTTP i symulowanego portu; nie importują Electron/SerialPort i niczego nie drukują. CI uruchamia je na Node 20 w Windows i Linux, z `npm ci --ignore-scripts` (testy nie wymagają binariów Electron ani natywnego portu).
 
+## Uruchamianie w tle i zatrzymywanie
+
+`Uruchom na nowo.vbs` włącza broker albo najpierw zatrzymuje własną działającą instancję. Wykorzystuje `start-pos.cmd`, który wczytuje istniejący `broker-local.cmd` i uruchamia zainstalowany `node_modules\electron\dist\electron.exe` bez pośredniego `npm start`. Tryb obecnego POS pozostaje: diagnostyka=false, online=false, obowiązek rezerwacji=false. Log startu i działania trafia do ignorowanego `local-results\broker-start.log`. Wcześniejsze zakończenie procesu jest zgłaszane bez czekania pełnych 45 sekund.
+
+`Sprawdz stan.vbs` odczytuje tylko metadane HTTP: działanie brokera, otwarcie portu, zapamiętany błąd połączenia, bieżącą operację i blokady dziennika. Nie odpytuje USB, nie drukuje i nie potwierdza stanu papieru.
+
+`Zamknij.vbs` blokuje przyjmowanie nowych żądań urządzenia, czeka na przyjęte żądania i całą bieżącą operację, zamyka dziennik oraz port, a następnie kończy Electron. Aktywna niewykorzystana rezerwacja POS lub oczekiwanie ponad trzy minuty powodują odmowę zatrzymania. Przyciski nie używają `taskkill`, nie usuwają dziennika ani stanów `unknown`. Zamknięcie i restart wykonywać po zakończeniu obsługi klienta w POS; broker nie widzi etapu zapisu rachunku w bazie starego klienta.
+
+Lokalne `POST /broker/control/stop` wymaga losowego tokenu z ignorowanego `local-results/broker-control.json`, adresu loopback i braku nagłówka `Origin`. Token nie trafia do publicznego statusu. Klient sprawdza identyfikator instancji i katalog, aby nie zatrzymać brokera z innej instalacji. `/broker/status` otrzymuje dodatkowe metadane `local_control`; katalog dotychczasowych API POS pozostaje bez zmian.
+
+Broker nie ma automatycznego ponownego otwierania USB po hibernacji. Po wybudzeniu można wykonać restart przyciskiem, sprawdzić stan i komunikację przez POS. Poprawne wznowienie nie wymaga usuwania blokady dziennika. Po awarii plik `operations.lock` usuwa się wyłącznie po potwierdzeniu braku wszystkich procesów brokera i PID wskazanego w pliku; `operations.jsonl` zostaje zachowany. Sam restart nie rozstrzyga przerwanego paragonu.
+
 ## Wyłączność i wynik
 
-Wszystkie ścieżki HTTP korzystają z jednego `BrokerService`. Blokada obejmuje sprawdzenie urządzenia, zapis zamiaru, cały dokument/raport i odczyt wyniku. Równoległe żądanie dostaje `409 PRINTER_BUSY`, bez wysyłania komend i bez wewnętrznej kolejki. Odbiorca online ma w przyszłości ustępować kasjerowi; ten PR nie implementuje arbitrażu POS ani rezerwacji przed zapisem sprzedaży.
+Wszystkie ścieżki HTTP korzystają z jednego `BrokerService`. Blokada obejmuje sprawdzenie urządzenia, zapis zamiaru, cały dokument/raport i odczyt wyniku. Równoległe żądanie dostaje `409 PRINTER_BUSY`, bez wysyłania komend i bez wewnętrznej kolejki. Broker udostępnia też trwałą rezerwację przed zapisem sprzedaży; aktywny token kasjera blokuje inne polecenia i odczyty USB (`PRINTER_RESERVED`). Obsługa checkoutu, odnowień i idempotencji zapisu bazy POS wymaga osobnego PR w POS.
 
 Przed operacją broker sprawdza stan sprzętu, otwartą transakcję i faktyczny numer urządzenia. Nie anuluje zastanej transakcji. Każda komenda zmieniająca stan wymaga odczytu ENQ/CMD i DLE; zapis do USB sam nie oznacza sukcesu. Raporty zachowują blokadę podczas oczekiwania, z limitem 120 s zamiast 5 s. Timeout zatrzymuje operację; nie świadczy o jej niewykonaniu.
 
@@ -48,17 +68,26 @@ Oba endpointy paragonów przyjmują opcjonalny nagłówek `X-Operation-Id`. POS 
 | `GET /operations/:id` | Trwały zapis operacji, bez USB |
 | `POST /operations/:id/reconcile` | Dodatkowy odczyt dowodów; nie zmienia `unknown` na sukces |
 | `POST /operations/receipt` | Nowy kontrakt zlecenia, domyślnie wyłączony |
+| `POST /printer/reservations` | Sprawdza gotowość i rezerwuje dla ID/rodzaju polecenia, bez wydruku |
+| `GET /printer/reservations/:id` | Publiczny stan bez tokenu i bez USB |
+| `POST /printer/reservations/:id/renew` | Odnawia niewykorzystany token |
+| `POST /printer/reservations/:id/release` | Zwalnia niewykorzystany token; nie usuwa `unknown` |
 
 Przyszłe stanowisko online wymaga lokalnej, stałej konfiguracji:
 
 ```text
 FISCAL_ONLINE_ENABLED=true
+FISCAL_REQUIRE_POS_RESERVATION=true
 FISCAL_BRANCH_ID=1
 FISCAL_ENVIRONMENT=production
 FISCAL_PRINTER_UNIQUE_NUMBER=<faktyczny numer z th_getrealid>
 ```
 
 Wartości powyżej są opisem konfiguracji, nie instrukcją włączenia produkcji. Nie włączać odbiorcy online przed testem sprzętu i wdrożeniem rezerwacji urządzenia **przed `createPosOrder`** w POS. Odczyt `/broker/status` nie jest rezerwacją i nie usuwa wyścigu między sprawdzeniem zajętości a sprzedażą.
+
+`FISCAL_DIAGNOSTICS_ONLY=true` blokuje nowe komendy urządzenia i przyznawanie tokenów, pozostawiając odczyty. `FISCAL_REQUIRE_POS_RESERVATION=false` (domyślnie) zachowuje dotychczasowego klienta. `true` wymaga nagłówków `X-Operation-Id` i `X-Printer-Reservation-Token` przy wszystkich nowych poleceniach POS, w tym raportach i szufladzie. `/operations/receipt` odmawia działania online, jeśli obowiązek tokenów POS jest wyłączony. Te flagi nie zmieniają kodowania ani budowy komend Thermal.
+
+`npm run check:broker` domyślnie wykonuje wyłącznie pięć odczytów; `--mode reservations` sprawdza tokeny bez druku. Indywidualne polecenia urządzenia wymagają `--case`, stałego `--operation-id`, `--allow-device-action` i odpowiednich danych; raport dobowy dodatkowo `--allow-daily-report`. Narzędzie nie ponawia żądań automatycznie. Szczegóły i wszystkie przykłady są w planie Windows. Wyniki w `local-results` i rzeczywiste payloady w `local-test-data` są ignorowane przez Git.
 
 Żądanie (bez danych adresowych i e-mail do faktury):
 
