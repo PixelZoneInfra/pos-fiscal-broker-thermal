@@ -1,6 +1,8 @@
 # Kontrakt broker–POS: rezerwacja przed zapisem sprzedaży
 
-API wersja 2. Ten dokument opisuje interfejs brokera. **Bieżący POS jeszcze nie wykonuje tej sekwencji**: w `CopilotFlinkTest` na `rozjebany2` (odczyt bd84ca5) `createPosOrder` jest przed drukowaniem, a żądania nie mają stabilnego ID ani tokenu. Zmiana POS pozostaje osobnym PR; nie należy włączać dla obecnego POS trybu wymagającego rezerwacji ani automatu online.
+API wersja 2. Integracja POS znajduje się w CopilotFlinkTest na `rozjebany2` (PR #8 i poprawka wspólnego rejestru). Aktywację rezerwacji/online wykonuje operator osobno, po wdrożeniu obu stron i odświeżeniu wszystkich kart.
+
+Źródłem numeru jest istniejący rejestr Website `manual_invoice_registers`, zarządzany w `/admin/faktury`. Broker nie wymaga kopii numeru w ENV: porównuje cel z dokumentu z rzeczywistą tożsamością USB. Numer zwrócony w rezerwacji jest świeżym odczytem urządzenia i POS porównuje go z rejestrem przed zapisem sprzedaży.
 
 ## Stałe ID i kolejność
 

@@ -75,8 +75,13 @@ class BrokerService {
     this.journal = journal;
     this.config = config;
     this.busy = null;
+    this.observedPrinterUniqueNumber = null;
     this.reservations = new PrinterReservations(journal, config.now);
-    for (const name of READS) this[name] = (...args) => this.exclusive(name, () => printer[name](...args));
+    for (const name of READS) this[name] = (...args) => this.exclusive(name, async () => {
+      const value = await printer[name](...args);
+      if (name === 'getSnapshot') this.observe(value);
+      return value;
+    });
     for (const [name, spec] of Object.entries(COMMANDS)) {
       this[name] = (...args) => {
         const options = args[spec.arity] || {};
@@ -94,7 +99,12 @@ class BrokerService {
       capabilities: { reservations: true, durableOperations: true },
       onlineOperationsEnabled: this.config.onlineEnabled === true,
       branch_id: this.config.branchId || null, environment: this.config.environment || null,
-      printer_unique_number: this.config.printerUniqueNumber || null };
+      printer_unique_number: this.observedPrinterUniqueNumber };
+  }
+
+  observe(snapshot) {
+    if (typeof snapshot?.identity?.uniqueNumber === 'string') this.observedPrinterUniqueNumber = snapshot.identity.uniqueNumber;
+    return snapshot;
   }
 
   async exclusive(label, run, access = {}) {
@@ -137,7 +147,7 @@ class BrokerService {
       throw problem('OPERATION_ALREADY_RECORDED', 'Operacja ma zapisany wynik. Odczytaj /operations/:id przed dalszym działaniem.');
     }
     return this.exclusive(`reserve:${request.operation_id}`, async () => {
-      const before = await this.raw.getSnapshot();
+      const before = this.observe(await this.raw.getSnapshot());
       this.validateDevice(before, this.config.printerUniqueNumber);
       return this.reservations.create(request.operation_id, request.command, before.identity.uniqueNumber, request.ttl_ms);
     });
@@ -160,11 +170,15 @@ class BrokerService {
     if (!this.config.onlineEnabled) throw problem('ONLINE_DISABLED', 'Zlecenia online są wyłączone.', 503);
     if (!this.config.requirePosReservation) throw problem('POS_RESERVATION_NOT_REQUIRED', 'Przed zleceniami online włącz obowiązek rezerwacji dla POS.', 503);
     if (!request || typeof request !== 'object') throw problem('INVALID_DATA', 'Brak danych zlecenia.', 400);
-    if (!Number.isInteger(this.config.branchId) || this.config.branchId < 1 || !this.config.environment || !this.config.printerUniqueNumber) {
+    if (!Number.isInteger(this.config.branchId) || this.config.branchId < 1 || !this.config.environment) {
       throw problem('DEVICE_NOT_CONFIGURED', 'Brak pełnego przypisania stanowiska.', 503);
     }
+    if (typeof request.printer_unique_number !== 'string' || !request.printer_unique_number.trim() ||
+      request.printer_unique_number.length > 40 || /[\x00-\x1f\x7f]/.test(request.printer_unique_number)) {
+      throw problem('INVALID_PRINTER_NUMBER', 'Nieprawidłowy numer drukarki ze snapshotu centralnego rejestru.', 400);
+    }
     if (request.branch_id !== this.config.branchId || request.environment !== this.config.environment ||
-      request.printer_unique_number !== this.config.printerUniqueNumber) {
+      (this.config.printerUniqueNumber && request.printer_unique_number !== this.config.printerUniqueNumber)) {
       throw problem('DEVICE_MISMATCH', 'Zlecenie jest przeznaczone dla innego stanowiska.');
     }
     validateId(request.operation_id);
@@ -199,7 +213,7 @@ class BrokerService {
           this.reservations.consume(reservation);
           record = this.journal.save({ ...record, reservationId: reservation.id });
         }
-        const before = await this.raw.getSnapshot();
+        const before = this.observe(await this.raw.getSnapshot());
         const expectedIdentity = reservation?.printerUniqueNumber || assignment?.printerUniqueNumber || this.config.printerUniqueNumber;
         this.validateDevice(before, expectedIdentity);
         // Must reach durable storage BEFORE the first mutation on the device.
@@ -209,7 +223,7 @@ class BrokerService {
           record = this.journal.save({ ...record, fiscalCloseAcknowledged: state });
         } };
         const value = await this.raw[name](...args, ...(RECEIPTS.has(name) ? [hooks] : []));
-        const after = await this.raw.getSnapshot();
+        const after = this.observe(await this.raw.getSnapshot());
         if (after.identity.uniqueNumber !== before.identity.uniqueNumber || after.transaction.transactionOpen || after.status.isTransactionOpen) {
           throw new Error('Nie można potwierdzić zamknięcia na tej samej drukarce.');
         }

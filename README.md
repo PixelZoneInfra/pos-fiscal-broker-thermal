@@ -80,8 +80,9 @@ FISCAL_ONLINE_ENABLED=true
 FISCAL_REQUIRE_POS_RESERVATION=true
 FISCAL_BRANCH_ID=1
 FISCAL_ENVIRONMENT=production
-FISCAL_PRINTER_UNIQUE_NUMBER=<faktyczny numer z th_getrealid>
 ```
+
+Numer unikatowy konfiguruje się wyłącznie w `manual_invoice_registers` przez GUI Website. Broker nie odczytuje starej zmiennej `FISCAL_PRINTER_UNIQUE_NUMBER`. POS przekazuje zamrożony cel z rejestru; broker porównuje go ze świeżym odczytem USB przed mutacją. `/broker/status.printer_unique_number` jest ostatnim zaobserwowanym numerem, początkowo null, a nie dodatkowym przypisaniem.
 
 Wartości powyżej są opisem konfiguracji, nie instrukcją włączenia produkcji. Nie włączać odbiorcy online przed testem sprzętu i wdrożeniem rezerwacji urządzenia **przed `createPosOrder`** w POS. Odczyt `/broker/status` nie jest rezerwacją i nie usuwa wyścigu między sprawdzeniem zajętości a sprzedażą.
 
