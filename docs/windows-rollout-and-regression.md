@@ -31,7 +31,7 @@ configure-pos.cmd
 
 Wkleić pełny adres do pytania w CMD i nacisnąć Enter. Kreator sam wyodrębnia adres serwera POS i zapisuje `broker-local.cmd`; zachowuje pozostałe ustawienia i kopię `.bak`. Nie trzeba otwierać Notatnika, rozumieć CORS ani ręcznie wpisywać zmiennych. Ta lokalna konfiguracja obsługuje przeglądarkę POS i jest wczytywana przez skrypty startowe. Bez niej pozostają dostępne odczyty z narzędzia CMD. Pliki są ignorowane przez Git; kreator nie zmienia ENV na Render, globalnych ustawień Windows ani komend drukarki.
 
-Domyślnie używany jest nadal COM3, 115200/8/N/1. Jeśli **działająca lokalna wersja** używa innego COM, wpisać go w tym samym pliku przez `set "FISCAL_SERIAL_PORT=COMx"`, podstawiając rzeczywistą nazwę. Nie zmieniać szybkości ani konfiguracji drukarki. Faktycznie wybrany port pokaże `/broker/status` jako `serialPort`. Można też po diagnostyce ustawić `FISCAL_PRINTER_UNIQUE_NUMBER`, aby zwykłe polecenia odrzucały inną podłączoną drukarkę.
+Domyślnie używany jest nadal COM3, 115200/8/N/1. Jeśli **działająca lokalna wersja** używa innego COM, wpisać go w tym samym pliku przez `set "FISCAL_SERIAL_PORT=COMx"`, podstawiając rzeczywistą nazwę. Nie zmieniać szybkości ani konfiguracji drukarki. Faktycznie wybrany port pokaże `/broker/status` jako `serialPort`. Numer zarządza się tylko w rejestrze strony; POS porównuje go z numerem rezerwacji/diagnostyki USB, a broker przed rozpoczęciem druku. Nie dopisujemy numeru do lokalnego ENV.
 
 4. Przygotować dane konkretnych NOWYCH, uzgodnionych operacji: produkty i właściwe litery VAT, kwoty, NIP jeśli dotyczy, formy płatności, kwotę wpłaty/wypłaty i zakres raportu okresowego. Nie kopiować do ponownego fiskalizowania wcześniej wydrukowanej sprzedaży. Szablony JSON w `test-data-examples` wymagają uzupełnienia; skopiować je do ignorowanego `local-test-data`.
 5. Ustalić identyfikator sesji, np. `banino-20261101`. Każda inna rzeczywista operacja ma inne ID. Ponowienie tej samej operacji zachowuje ID i payload, także po restarcie. Zachować je w protokole.
@@ -171,7 +171,7 @@ Zatrzymać broker i uruchomić `start-pos.cmd`: diagnostyka=false, online=false,
 
 Sprawdzić przy okazji uzgodnionych rzeczywistych czynności: logowanie/wylogowanie kasjera, status/gotówkę, szufladę, sprzedaż gotówkową i kartową, NIP, rabat, płatność dzieloną, kopię, wpłatę/wypłatę oraz raporty używane w lokalu. Porównać dokument i dane rachunku; brak podwójnego rachunku lub podwójnego rozchodu. Sprzedaż przez POS zapisuje jego bazę i magazyn, w odróżnieniu od bezpośredniego testu brokera. Podmiana plików nie cofa tych danych.
 
-Nie próbować normalnej sprzedaży z obecnego POS w trybie `FISCAL_REQUIRE_POS_RESERVATION=true`: najpierw może zapisać rachunek, a następnie otrzymać odmowę drukowania. Dopiero osobny PR integracyjny POS przełoży rezerwację przed `createPosOrder`, doda stabilny klucz po stronie backendu i obsługę odzyskiwania.
+Starsze wersje POS bez integracji rezerwacji nie mogą pracować z `FISCAL_REQUIRE_POS_RESERVATION=true`. Aktualny CopilotFlinkTest po PR #8 i poprawce wspólnego rejestru rezerwuje przed `createPosOrder`; operator powinien odświeżyć wszystkie karty i wykonać test według runbooka POS.
 
 ## 7. Endpoint online — opcjonalna próba w tej samej sesji
 
@@ -182,12 +182,11 @@ set "FISCAL_DIAGNOSTICS_ONLY=false"
 set "FISCAL_REQUIRE_POS_RESERVATION=true"
 set "FISCAL_BRANCH_ID=1"
 set "FISCAL_ENVIRONMENT=production"
-set "FISCAL_PRINTER_UNIQUE_NUMBER=TU_FAKTYCZNY_NUMER_Z_DIAGNOSTYKI"
 set "FISCAL_ONLINE_ENABLED=true"
 npm start
 ```
 
-Podstawić prawdziwy numer. Uzupełniony `online-receipt.json` musi mieć to samo przypisanie i dotyczyć nowej uzgodnionej transakcji. To pojedynczy test API, bez płatności P24, rezerwacji `/pl/book`, faktury i magazynu:
+Zamrożony dokument z centralnego rejestru musi wskazywać rzeczywiście podłączone urządzenie. Uzupełniony `online-receipt.json` musi mieć to samo przypisanie i dotyczyć nowej uzgodnionej transakcji. To pojedynczy test API, bez płatności P24, rezerwacji `/pl/book`, faktury i magazynu:
 
 ```bat
 npm run check:broker -- --case online-receipt --payload local-test-data\online-receipt.json --operation-id "%SESSION%:online:01" --allow-device-action --report local-results\07-online-api.json
