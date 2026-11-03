@@ -4,7 +4,9 @@
   "description": "Aplikacja pośrednicząca do komunikacji z drukarką fiskalną Posnet Thermal.",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "test": "node --test",
+    "review": "node review-operation.js"
   },
   "keywords": [],
   "author": "",
