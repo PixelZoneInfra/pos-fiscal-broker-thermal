@@ -12,6 +12,16 @@ Ta zmiana przygotowuje urządzenie do przyszłej kolejki online. Nie zawiera odb
 
 Lokalne ustawienia przeglądarki/urządzenia można zachować w ignorowanym `broker-local.cmd` (wzór `broker-local.example.cmd`). `FISCAL_ALLOWED_ORIGINS` to dokładne originy POS, bez ścieżki i końcowego `/`, rozdzielone przecinkami. Po skonfigurowaniu dozwolony POS otrzymuje CORS/OPTIONS dla JSON oraz nagłówków ID/token; obcy origin jest odrzucany przed komendami. Bez konfiguracji zachowano poprzednie zachowanie HTTP bez CORS. Ten parametr nie zmienia kodowania ani komend urządzenia.
 
+## Website Preview z drukarką Banino
+
+Po wdrożeniu obsługi rezerwacji w POS można uruchomić uzgodniony test na rzeczywistej drukarce Banino przez `start-online-preview.cmd`. Plik wczytuje `broker-local.cmd`, zachowuje port COM i dozwolone originy, a następnie ustawia środowisko `preview`, oddział `1`, online oraz obowiązek rezerwacji POS. Korzysta bezpośrednio z zainstalowanego Electron.
+
+Przed startem ustaw na backendzie POS `FISCAL_ONLINE_AUTOMATIC=false` i zakończ poprzedni broker przez `Zamknij.vbs`. Sam start brokera niczego nie drukuje; przyjęte zlecenia mogą wystawić rzeczywisty paragon. Pozostaw otwarte okno CMD. Stan sprawdzaj przez `Sprawdz stan.vbs`, a zatrzymuj przez `Zamknij.vbs`.
+
+W tym teście do uruchamiania służy `start-online-preview.cmd`. Zwykłe `Uruchom na nowo.vbs` korzysta z `start-pos.cmd` i wyłącza online. Tryb Preview nie potrzebuje `FISCAL_QUEUE_TOKEN`, NIP-u ani numeru drukarki w konfiguracji brokera: kolejkę pobiera POS, a cel urządzenia jest przekazywany z rejestru.
+
+Aktualizacja istniejącej instalacji: zatrzymaj broker i skopiuj pliki źródłowe z tej wersji do jego dotychczasowego folderu. Zachowaj lokalny `broker-local.cmd`, `node_modules` oraz dziennik operacji. Ta poprawka nie zmienia zależności npm. Nowa instalacja wymaga najpierw `setup-windows.cmd`.
+
 ## Uruchomienie i testy
 
 ```sh
@@ -80,8 +90,9 @@ FISCAL_ONLINE_ENABLED=true
 FISCAL_REQUIRE_POS_RESERVATION=true
 FISCAL_BRANCH_ID=1
 FISCAL_ENVIRONMENT=production
-FISCAL_PRINTER_UNIQUE_NUMBER=<faktyczny numer z th_getrealid>
 ```
+
+Numer unikatowy konfiguruje się wyłącznie w `manual_invoice_registers` przez GUI Website. Broker nie odczytuje starej zmiennej `FISCAL_PRINTER_UNIQUE_NUMBER`. POS przekazuje zamrożony cel z rejestru; broker porównuje go ze świeżym odczytem USB przed mutacją. `/broker/status.printer_unique_number` jest ostatnim zaobserwowanym numerem, początkowo null, a nie dodatkowym przypisaniem.
 
 Wartości powyżej są opisem konfiguracji, nie instrukcją włączenia produkcji. Nie włączać odbiorcy online przed testem sprzętu i wdrożeniem rezerwacji urządzenia **przed `createPosOrder`** w POS. Odczyt `/broker/status` nie jest rezerwacją i nie usuwa wyścigu między sprawdzeniem zajętości a sprzedażą.
 
