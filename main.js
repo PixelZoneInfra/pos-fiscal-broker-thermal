@@ -34,7 +34,6 @@ if (!app.requestSingleInstanceLock()) {
       serialPort: port.path,
       branchId: Number(process.env.FISCAL_BRANCH_ID),
       environment: process.env.FISCAL_ENVIRONMENT,
-      printerUniqueNumber: process.env.FISCAL_PRINTER_UNIQUE_NUMBER,
     });
     port.open(error => {
       if (error) console.error(`Błąd otwarcia ${port.path}:`, error.message);

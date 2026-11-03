@@ -237,6 +237,29 @@ test('online API enforces enabled flag, branch, environment and printer', async 
   assert.equal((await broker.submitReceipt(request)).success, true);
 });
 
+test('online uses the frozen registry target and real USB identity without a second configured printer number', async t => {
+  const { broker, port } = setup(t, { onlineEnabled: true, requirePosReservation: true, branchId: 1, environment: 'test' });
+  port.uniqueNumber = 'EA0  2402426691';
+  const request = { operation_id: 'online:registry:1', branch_id: 1, environment: 'test', printer_unique_number: port.uniqueNumber, receipt };
+  const result = await broker.submitReceipt(request);
+  assert.equal(result.state, 'fiscal_confirmed');
+  assert.equal(result.receipt.printerUniqueNumber, 'EA0  2402426691');
+  assert.equal(broker.status().printer_unique_number, 'EA0  2402426691');
+  assert.equal(port.mutations.filter(x => x.includes('$h')).length, 1);
+  assert.deepEqual(await broker.submitReceipt(request), result);
+  assert.equal(port.mutations.filter(x => x.includes('$h')).length, 1);
+});
+
+test('a different physical device is refused before a fiscal mutation when no local printer-number setting exists', async t => {
+  const { broker, port } = setup(t, { onlineEnabled: true, requirePosReservation: true, branchId: 1, environment: 'test' });
+  const request = { operation_id: 'online:registry:2', branch_id: 1, environment: 'test', printer_unique_number: port.uniqueNumber, receipt };
+  port.uniqueNumber = 'FOREIGN DEVICE';
+  await assert.rejects(broker.submitReceipt(request), error => error.operation.state === 'not_started');
+  assert.equal(port.mutations.length, 0);
+  port.uniqueNumber = request.printer_unique_number;
+  assert.equal((await broker.submitReceipt(request)).state, 'fiscal_confirmed');
+});
+
 test('legacy simple receipt, cash, drawer, reports and discount bytes remain supported', async t => {
   const { broker, port } = setup(t);
   await broker.login('Kasjer', 'Kasa 1');
