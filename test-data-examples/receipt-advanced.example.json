@@ -1,0 +1,5 @@
+{
+  "items": [{ "name": "UZUPELNIJ_NAZWE_NOWEJ_SPRZEDAZY", "quantity": 1, "unitPrice": null, "vatRate": "UZUPELNIJ" }],
+  "payments": [{ "type": "CARD", "amount": null, "name": "PayU" }],
+  "buyerNip": null
+}

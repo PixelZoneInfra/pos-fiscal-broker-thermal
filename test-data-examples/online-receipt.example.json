@@ -1,0 +1,9 @@
+{
+  "branch_id": 1,
+  "environment": "production",
+  "printer_unique_number": "UZUPELNIJ_FAKTYCZNY_NUMER",
+  "receipt": {
+    "items": [{ "name": "UZUPELNIJ_NAZWE_NOWEJ_SPRZEDAZY", "quantity": 1, "unitPrice": null, "vatRate": "UZUPELNIJ" }],
+    "payments": [{ "type": "CARD", "amount": null, "name": "PayU" }]
+  }
+}

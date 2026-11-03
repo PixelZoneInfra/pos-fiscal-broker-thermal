@@ -229,7 +229,7 @@ test('online API enforces enabled flag, branch, environment and printer', async 
   const { broker, port } = setup(t);
   const request = { operation_id: 'online:1', branch_id: 1, environment: 'test', printer_unique_number: port.uniqueNumber, receipt };
   await assert.rejects(broker.submitReceipt(request), e => e.code === 'ONLINE_DISABLED');
-  Object.assign(broker.config, { onlineEnabled: true, branchId: 1, environment: 'test', printerUniqueNumber: port.uniqueNumber });
+  Object.assign(broker.config, { onlineEnabled: true, requirePosReservation: true, branchId: 1, environment: 'test', printerUniqueNumber: port.uniqueNumber });
   for (const change of [{ branch_id: 2 }, { environment: 'production' }, { printer_unique_number: 'OTHER' }]) {
     await assert.rejects(broker.submitReceipt({ ...request, ...change }), e => e.code === 'DEVICE_MISMATCH');
   }

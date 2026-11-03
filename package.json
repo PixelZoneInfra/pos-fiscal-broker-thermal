@@ -6,7 +6,8 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test",
-    "review": "node review-operation.js"
+    "review": "node review-operation.js",
+    "check:broker": "node scripts/broker-check.js"
   },
   "keywords": [],
   "author": "",
