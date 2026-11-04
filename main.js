@@ -20,6 +20,10 @@ if (!app.requestSingleInstanceLock()) {
     const { BrokerService } = require('./broker-service');
     const { createApi } = require('./api');
     const { createControl } = require('./broker-control');
+    const { profileFromEnvironment, saveProfile } = require('./launch-profile');
+    // Direct npm/Electron starts keep their existing configuration contract. Bundled launchers
+    // explicitly opt into persistent daily-restart profiles before any device is opened.
+    const launchProfile = process.env.FISCAL_LAUNCH_PROFILE === 'managed' ? profileFromEnvironment(process.env) : null;
 
     journal = new OperationJournal(path.join(app.getPath('userData'), 'fiscal-operations'));
     const port = new SerialPort({
@@ -50,6 +54,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     server = control.attach(require('express')(), createApi(printer)).listen(3030, '127.0.0.1', () => {
       control.publish(3030);
+      if (launchProfile) saveProfile(__dirname, launchProfile);
       console.log('API: http://127.0.0.1:3030; dziennik:', path.join(app.getPath('userData'), 'fiscal-operations'));
     });
     server.on('error', error => {

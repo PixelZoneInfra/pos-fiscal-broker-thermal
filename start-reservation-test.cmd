@@ -1,5 +1,6 @@
 @echo off
 setlocal
+set "FISCAL_LAUNCH_PROFILE=managed"
 cd /d "%~dp0"
 if exist "%~dp0broker-local.cmd" call "%~dp0broker-local.cmd"
 set "FISCAL_DIAGNOSTICS_ONLY=false"

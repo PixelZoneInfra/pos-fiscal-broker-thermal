@@ -25,18 +25,24 @@ test('Windows CMD launchers select safe modes, load local config, and support sp
     for (const [filename, diagnostics, required, online = 'false'] of [
       ['start-diagnostics.cmd', 'true', 'false'], ['start-pos.cmd', 'false', 'false'], ['start-reservation-test.cmd', 'false', 'true'],
       ['start-online-preview.cmd', 'false', 'true', 'true'],
+      ['start-online-production.cmd', 'false', 'true', 'true'],
+      ['start-production-reservations.cmd', 'false', 'true', 'false'],
     ]) {
       fs.copyFileSync(path.join(__dirname, '..', filename), path.join(directory, filename));
       const child = spawnSync('cmd.exe', ['/d', '/c', filename], { cwd: directory, encoding: 'utf8' });
       assert.equal(child.status, 0, child.stdout + child.stderr);
       const observed = JSON.parse(fs.readFileSync(path.join(directory, 'observed.json'), 'utf8'));
       assert.equal(observed.cwd, directory);
-      assert.deepEqual(observed.args, ['start-pos.cmd', 'start-online-preview.cmd'].includes(filename) ? [] : ['start']);
+      assert.deepEqual(observed.args, ['start-pos.cmd', 'start-online-preview.cmd', 'start-online-production.cmd', 'start-production-reservations.cmd'].includes(filename) ? [] : ['start']);
       assert.equal(observed.diagnostics, diagnostics);
       assert.equal(observed.required, required);
       assert.equal(observed.online, online);
       if (filename === 'start-online-preview.cmd') {
         assert.equal(observed.environment, 'preview');
+        assert.equal(observed.branch, '1');
+      }
+      if (['start-online-production.cmd', 'start-production-reservations.cmd'].includes(filename)) {
+        assert.equal(observed.environment, 'production');
         assert.equal(observed.branch, '1');
       }
       assert.equal(observed.origins, 'https://pos.example.test');
