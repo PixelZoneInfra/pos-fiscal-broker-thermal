@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
+const { restartLauncher } = require('../launch-profile');
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA = path.join(ROOT, 'local-results');
@@ -49,6 +50,8 @@ async function inspect() {
 function describe(status) {
   if (!status) return 'Broker jest wyłączony.\n\nAby go włączyć, kliknij „Uruchom na nowo”.';
   const lines = ['Broker odpowiada.', `Port drukarki: ${status.serialPort || 'brak danych'}.`];
+  lines.push(`Srodowisko: ${status.environment || 'legacy'}, oddzial: ${status.branch_id || 'brak'}.`);
+  lines.push(`Online: ${status.onlineOperationsEnabled ? 'wlaczone' : 'wylaczone'}; rezerwacje POS: ${status.posReservationRequired ? 'wymagane' : 'niewymagane'}.`);
   const local = status.local_control;
   if (local) {
     lines.push(`Połączenie z portem USB/COM: ${local.serial_connected ? 'otwarte' : 'BRAK — sprawdź drukarkę i kabel'}.`);
@@ -145,15 +148,15 @@ async function stop(status) {
   return true;
 }
 
-async function launch() {
+async function launch(launcher) {
   if (process.platform !== 'win32') throw new Error('Te przyciski są przeznaczone dla Windows.');
-  if (!fs.existsSync(path.join(ROOT, 'start-pos.cmd'))) throw new Error('Brak start-pos.cmd. Rozpakuj paczkę do obecnego folderu brokera.');
+  if (!fs.existsSync(path.join(ROOT, launcher))) throw new Error(`Brak ${launcher}. Rozpakuj paczke do obecnego folderu brokera.`);
   fs.mkdirSync(DATA, { recursive: true });
   let exited = false;
   let exitCode;
   let startError;
   await new Promise((resolve, reject) => {
-    const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'call start-pos.cmd >> local-results\\broker-start.log 2>&1'], {
+    const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `call ${launcher} >> local-results\\broker-start.log 2>&1`], {
       cwd: ROOT, detached: true, windowsHide: true, stdio: 'ignore',
     });
     child.once('error', reject);
@@ -201,9 +204,12 @@ async function run(action) {
   if (action === 'status') return describe(await inspect());
   const unlock = lock();
   try {
+    // Validate before stopping a healthy process. Corrupt metadata never selects legacy.
+    const launcher = action === 'restart' ? restartLauncher(ROOT) : null;
+    if (launcher && !fs.existsSync(path.join(ROOT, launcher))) throw new Error(`Brak ${launcher}. Nie zatrzymano brokera.`);
     await stop(await inspect());
     if (action === 'stop') return 'Broker jest wyłączony.\n\nAby go włączyć, kliknij „Uruchom na nowo”.';
-    return 'Uruchomiono broker w tle.\n\n' + describe(await launch());
+    return 'Uruchomiono broker w tle.\n\n' + describe(await launch(launcher));
   } finally { unlock(); }
 }
 
