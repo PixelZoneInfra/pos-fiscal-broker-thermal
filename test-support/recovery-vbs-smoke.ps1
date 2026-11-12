@@ -35,14 +35,14 @@ fs.writeFileSync(path.join(directory, 'operations.lock'), String(process.pid));
 
   # Real VBS -> Node -> Windows PowerShell/CIM. The waiting cscript parent must
   # not be classified as a broker merely because its path contains the repo name.
-  $output = & cscript.exe //NoLogo (Join-Path $fixture 'Odzyskaj po awarii.vbs')
+  $output = (& cscript.exe //NoLogo (Join-Path $fixture 'Odzyskaj po awarii.vbs')) -join "`n"
   if ($LASTEXITCODE -ne 0) { throw "VBS recovery failed: $output" }
   if (Test-Path $lockPath) { throw 'Stale operations.lock was not removed from AppData.' }
   if ((Get-FileHash $journalPath -Algorithm SHA256).Hash -ne $before) { throw 'Original journal changed.' }
   $backups = @(Get-ChildItem (Join-Path $directory 'lock-recovery-backups') -Directory)
   if ($backups.Count -ne 1) { throw 'Expected one recovery backup.' }
   if ((Get-FileHash (Join-Path $backups[0].FullName 'operations.jsonl') -Algorithm SHA256).Hash -ne $before) { throw 'Backup differs from original journal.' }
-  $output = & cscript.exe //NoLogo (Join-Path $fixture 'Odzyskaj po awarii.vbs')
+  $output = (& cscript.exe //NoLogo (Join-Path $fixture 'Odzyskaj po awarii.vbs')) -join "`n"
   if ($LASTEXITCODE -ne 0 -or $output -notmatch 'Brak operations.lock') { throw "Second recovery was not a no-op: $output" }
 
   # An alive broker-shaped process without an API must still prevent removal.
@@ -66,7 +66,7 @@ setInterval(() => {}, 1000);
     if ($keeper.HasExited -or [DateTime]::UtcNow -gt $deadline) { throw 'Fixture process did not start.' }
     Start-Sleep -Milliseconds 100
   }
-  $output = & cscript.exe //NoLogo (Join-Path $fixture 'Odzyskaj po awarii.vbs')
+  $output = (& cscript.exe //NoLogo (Join-Path $fixture 'Odzyskaj po awarii.vbs')) -join "`n"
   if ($LASTEXITCODE -eq 0 -or $output -notmatch 'Proces node.exe') { throw "Expected live-process refusal: $output" }
   if (-not (Test-Path $lockPath) -or (Get-Content -Raw $lockPath) -ne $lockBefore) { throw 'Live-process test changed the lock.' }
   if ((Get-FileHash $journalPath -Algorithm SHA256).Hash -ne $before) { throw 'Live-process test changed the journal.' }
