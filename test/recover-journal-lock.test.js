@@ -54,13 +54,67 @@ test('a second click with no lock is a no-op and does not replace backups or his
   assert.deepEqual(fs.readdirSync(path.dirname(first.backup)), [path.basename(first.backup)]);
 });
 
-test('live PID is blocked even if API is absent or the PID now belongs to another program', async t => {
+test('a stale PID reused by the recovery Node process is not mistaken for a broker', async t => {
   const f = fixture(t);
   fs.writeFileSync(f.lockPath, String(process.pid));
-  await assert.rejects(recover({ ...f.options, isAlive: pidExists }), /nadal istnieje/);
-  assert.equal(fs.readFileSync(f.lockPath, 'utf8'), String(process.pid));
+  const result = await recover({ ...f.options, isAlive: pidExists,
+    processes: async () => [{ ProcessId: process.pid, Name: 'node.exe',
+      ExecutablePath: process.execPath, CommandLine: `node "${path.join(f.root, 'tools', 'recover-journal-lock.js')}"` }] });
+  assert.equal(result.changed, true);
+  assert.equal(fs.existsSync(f.lockPath), false);
   assert.deepEqual(fs.readFileSync(f.journalPath), f.original);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(result.backup, 'recovery.json'), 'utf8')).ownerState, 'reused_by_recovery');
   assert.equal(pidExists(process.pid), true);
+});
+
+function recoveryWrapper(root, overrides = {}) {
+  return { ProcessId: process.ppid, Name: 'wscript.exe', ExecutablePath: 'C:\\Windows\\System32\\wscript.exe',
+    CommandLine: `"C:\\Windows\\System32\\wscript.exe" "${path.join(root, 'Odzyskaj po awarii.vbs')}"`, ...overrides };
+}
+
+test('the exact waiting VBS parent is excluded, including when Windows reused the stale PID for it', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.lockPath, String(process.ppid));
+  const result = await recover({ ...f.options, isAlive: pidExists,
+    processes: async () => [recoveryWrapper(f.root)] });
+  assert.equal(result.changed, true);
+  assert.equal(fs.existsSync(f.lockPath), false);
+  assert.deepEqual(fs.readFileSync(f.journalPath), f.original);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(result.backup, 'recovery.json'), 'utf8')).ownerState, 'reused_by_recovery');
+});
+
+test('a reused unrelated PID is accepted only with a start time later than the original lock', async t => {
+  const f = fixture(t);
+  const stat = fs.statSync(f.lockPath);
+  const result = await recover({ ...f.options, isAlive: () => true,
+    processes: async () => [{ ProcessId: 12345678, Name: 'notepad.exe', ExecutablePath: 'C:\\Windows\\notepad.exe',
+      CommandLine: 'notepad.exe', StartedAt: new Date(Math.max(stat.birthtimeMs, stat.mtimeMs) + 2000).toISOString() }] });
+  assert.equal(result.changed, true);
+  assert.deepEqual(fs.readFileSync(f.journalPath), f.original);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(result.backup, 'recovery.json'), 'utf8')).ownerState, 'reused_after_lock');
+});
+
+for (const startedAt of [undefined, 'invalid', '2000-01-01T00:00:00Z']) {
+  test(`an existing lock PID without proven reuse (${startedAt}) is still refused`, async t => {
+    const f = fixture(t);
+    await assert.rejects(recover({ ...f.options, isAlive: () => true,
+      processes: async () => [{ ProcessId: 12345678, Name: 'notepad.exe', StartedAt: startedAt }] }), /Nie mozna potwierdzic/);
+    f.preserved();
+  });
+}
+
+test('a live PID missing from the inventory cannot be treated as stale', async t => {
+  const f = fixture(t);
+  await assert.rejects(recover({ ...f.options, isAlive: () => true }), /Nie mozna potwierdzic/);
+  f.preserved();
+});
+
+test('a live broker is refused even with a PID recycled after the old lock', async t => {
+  const f = fixture(t);
+  await assert.rejects(recover({ ...f.options, isAlive: () => true,
+    processes: async () => [recoveryWrapper(f.root), { ProcessId: 12345678, Name: 'electron.exe',
+      StartedAt: new Date(Date.now() + 2000).toISOString() }] }), /Proces electron/);
+  f.preserved();
 });
 
 for (const [name, deps, pattern] of [
@@ -175,6 +229,20 @@ test('process matching excludes this tool, accepts identifiable unrelated Node, 
     { ProcessId: 97, Name: 'node.exe', ExecutablePath: 'C:\\nodejs\\node.exe', CommandLine: 'node C:\\unrelated\\service.js' },
   ], root));
   assert.throws(() => assertNoBroker([{ ProcessId: 97, Name: 'node.exe', CommandLine: 'node review-operation.js' }], root), /Proces node/);
+});
+
+test('script host exclusion requires the actual parent, its executable and the exact VBS entry point', () => {
+  const root = path.join(os.tmpdir(), 'pos-fiscal-broker with spaces');
+  assert.doesNotThrow(() => assertNoBroker([recoveryWrapper(root)], root));
+  assert.doesNotThrow(() => assertNoBroker([recoveryWrapper(root, { Name: 'cscript.exe',
+    ExecutablePath: 'C:\\Windows\\System32\\cscript.exe',
+    CommandLine: `cscript.exe //NoLogo "${path.join(root, 'Odzyskaj po awarii.vbs')}"` })], root));
+  for (const row of [
+    recoveryWrapper(root, { ProcessId: 97 }),
+    recoveryWrapper(root, { ExecutablePath: null }),
+    recoveryWrapper(root, { CommandLine: `wscript.exe "${path.join(root, 'Uruchom na nowo.vbs')}"` }),
+    recoveryWrapper(root, { CommandLine: `wscript.exe "other.vbs" "${path.join(root, 'Odzyskaj po awarii.vbs')}"` }),
+  ]) assert.throws(() => assertNoBroker([row], root), /Proces wscript/);
 });
 
 test('the TCP check uses a real listening socket and never sends a device command', async t => {
