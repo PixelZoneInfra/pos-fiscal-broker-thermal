@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 $repository = Split-Path -Parent $PSScriptRoot
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('pos-fiscal-broker recovery ' + [guid]::NewGuid())
 $previousAppData = $env:APPDATA
@@ -77,3 +78,4 @@ finally {
   $env:PIXELZONE_RECOVERY_FIXTURE = $previousFixture
   if (Test-Path $fixture) { Remove-Item $fixture -Recurse -Force }
 }
+exit 0
