@@ -4,6 +4,11 @@
 
 **Codzienna obsługa Windows:** `Uruchom na nowo.vbs`, `Sprawdz stan.vbs`, `Zamknij.vbs`. Broker działa w tle, bez okna CMD i widocznego `index.html`. Na pulpit należy utworzyć skróty do VBS; same pliki zostają w katalogu brokera razem z `tools`. [Instrukcja pracownika i odzyskiwania startu](tools/INSTALACJA.txt).
 
+**Po awarii zasilania:** osobny `Odzyskaj po awarii.vbs` sprawdza procesy, PID i port,
+tworzy kopię i archiwizuje wyłącznie osierocony `operations.lock`.
+Zachowuje `operations.jsonl`; nie uruchamia brokera ani wydruku.
+[Instrukcja i znaczenie plików](docs/recovery-after-power-loss.md).
+
 Lokalny broker Electron/Express dla Posnet Thermal XL2 Online. API działa na `127.0.0.1:3030`, domyślny port drukarki pozostaje `COM3`, 115200/8/N/1. Jeśli lokalna działająca instalacja ma inny port, można go wskazać przez `FISCAL_SERIAL_PORT`, bez edycji komend. Kodowanie, komendy pozycji, rabaty, VAT i płatności zachowują dotychczasowy format.
 
 Ta zmiana przygotowuje urządzenie do przyszłej kolejki online. Nie zawiera odbiorcy kolejki, połączeń do baz, płatności, KSeF, poczty ani operacji magazynowych. Uruchomienie wersji testowej na stanowisku wymaga przejścia [procedury sprzętowej](docs/hardware-verification.md).
