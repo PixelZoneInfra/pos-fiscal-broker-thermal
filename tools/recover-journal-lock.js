@@ -71,9 +71,8 @@ function windowsProcesses() {
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $items = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
-  Where-Object { $_.Name -match '^(electron|node|pos-fiscal-broker-thermal)\\.exe$' -or
-    $_.ExecutablePath -like '*pos-fiscal-broker*' -or $_.CommandLine -like '*pos-fiscal-broker*' } |
-  Select-Object ProcessId, Name, ExecutablePath, CommandLine)
+  Select-Object ProcessId, ParentProcessId, Name, ExecutablePath, CommandLine,
+    @{Name='StartedAt'; Expression={ if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null } }})
 ConvertTo-Json -InputObject $items -Compress
 `;
   return new Promise((resolve, reject) => {
@@ -89,12 +88,22 @@ ConvertTo-Json -InputObject $items -Compress
   });
 }
 
-function assertNoBroker(rows, root, ownPid = process.pid) {
+function ownRecoveryWrapper(row, root, parentPid = process.ppid) {
+  if (row?.ProcessId !== parentPid || !/^(wscript|cscript)\.exe$/i.test(row.Name || '') ||
+    !/[\\/](wscript|cscript)\.exe$/i.test(row.ExecutablePath || '')) return false;
+  // Shell.Run waits for Node, so the VBS host is still alive during recovery.
+  // Exclude only our direct parent executing this exact VBS, not every script host.
+  const args = (row.CommandLine || '').match(/"[^"]*"|\S+/g)?.map(arg => arg.replace(/^"|"$/g, '')) || [];
+  const script = args.slice(1).find(arg => !arg.startsWith('//'));
+  return script?.toLowerCase() === path.join(path.resolve(root), 'Odzyskaj po awarii.vbs').toLowerCase();
+}
+
+function assertNoBroker(rows, root, ownPid = process.pid, parentPid = process.ppid) {
   if (!Array.isArray(rows)) throw new Error('Brak pewnej listy procesow. Nie ruszono blokady.');
   const normalizedRoot = path.resolve(root).toLowerCase();
   for (const row of rows) {
     if (!Number.isSafeInteger(row.ProcessId) || typeof row.Name !== 'string') throw new Error('Nieprawidlowa lista procesow. Nie ruszono blokady.');
-    if (row.ProcessId === ownPid) continue;
+    if (row.ProcessId === ownPid || ownRecoveryWrapper(row, root, parentPid)) continue;
     const name = row.Name.toLowerCase();
     const command = typeof row.CommandLine === 'string' ? row.CommandLine.toLowerCase() : '';
     const executable = typeof row.ExecutablePath === 'string' ? row.ExecutablePath.toLowerCase() : '';
@@ -108,6 +117,20 @@ function assertNoBroker(rows, root, ownPid = process.pid) {
       throw new Error(`Nie mozna rozpoznac procesu Node PID ${row.ProcessId}. Nie ruszono blokady.`);
     }
   }
+}
+
+function lockOwnerState(pid, original, rows, root, isAlive) {
+  if (!isAlive(pid)) return 'absent';
+  const owner = rows.find(row => row.ProcessId === pid);
+  // These processes are known not to open operations.lock. Windows can reuse an
+  // old broker PID for the very Node/VBS processes doing this recovery.
+  if (pid === process.pid || ownRecoveryWrapper(owner, root)) return 'reused_by_recovery';
+  const startedAt = Date.parse(owner?.StartedAt);
+  const lockTime = Math.max(original.stat.birthtimeMs, original.stat.mtimeMs);
+  // Do not infer reuse from a different executable alone. Require evidence that
+  // it started after the lock existed, allowing one second for timestamp precision.
+  if (Number.isFinite(startedAt) && startedAt > lockTime + 1000) return 'reused_after_lock';
+  throw new Error(`Nie mozna potwierdzic, ze PID ${pid} z operations.lock jest osierocony. Nie ruszono blokady.`);
 }
 
 function readRegular(filename, maxSize) {
@@ -139,7 +162,7 @@ async function recover({ root = ROOT, directory = journalDirectory(),
     try { original = readRegular(lockPath, 64); }
     catch (error) {
       if (error.code === 'ENOENT') return { changed: false, directory,
-        message: 'Brak operations.lock. Nie ma blokady do odzyskania.\nNie usunieto zadnych danych. Jesli start nadal nie dziala, sprawdz local-results\\broker-start.log.' };
+        message: `Brak operations.lock w:\n${directory}\n\nNie ma blokady do odzyskania. Nie usunieto zadnych danych. Jesli start nadal nie dziala, sprawdz local-results\\broker-start.log.` };
       throw error;
     }
     const text = original.bytes.toString('utf8').trim();
@@ -148,12 +171,12 @@ async function recover({ root = ROOT, directory = journalDirectory(),
       throw new Error('operations.lock nie zawiera prawidlowego PID. Nie zmieniono pliku; potrzebna jest weryfikacja.');
     }
     const check = async () => {
-      if (isAlive(pid)) throw new Error(`PID ${pid} z operations.lock nadal istnieje. Nie ruszono blokady, nawet jesli to inny program.`);
       if (!await freePort()) throw new Error('Port 3030 jest zajety. Broker lub inna aplikacja nadal dziala. Nie ruszono blokady.');
-      assertNoBroker(await processes(), root);
-      if (isAlive(pid)) throw new Error(`PID ${pid} pojawil sie podczas sprawdzania. Nie ruszono blokady.`);
+      const rows = await processes();
+      assertNoBroker(rows, root);
+      return lockOwnerState(pid, original, rows, root, isAlive);
     };
-    await check();
+    const ownerState = await check();
     const journalPath = path.join(directory, 'operations.jsonl');
     let journal;
     try { journal = readRegular(journalPath); }
@@ -164,7 +187,7 @@ async function recover({ root = ROOT, directory = journalDirectory(),
     const backup = path.join(backupParent, new Date().toISOString().replace(/[:.]/g, '-') + '-' + randomUUID());
     fs.mkdirSync(backup, { mode: 0o700 });
     saveExclusive(path.join(backup, 'operations.jsonl'), journal.bytes);
-    saveExclusive(path.join(backup, 'recovery.json'), JSON.stringify({ version: 1, action: 'archive_stale_pid_lock', pid,
+    saveExclusive(path.join(backup, 'recovery.json'), JSON.stringify({ version: 1, action: 'archive_stale_pid_lock', pid, ownerState,
       time: new Date().toISOString(), journalSha256: createHash('sha256').update(journal.bytes).digest('hex') }, null, 2) + '\n');
     // Repeat checks after creating the backup. Keep the original lock present until the final rename.
     await check();
