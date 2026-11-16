@@ -6,7 +6,7 @@ const os = require('node:os');
 const net = require('node:net');
 const { spawnSync } = require('node:child_process');
 const { OperationJournal } = require('../operation-journal');
-const { recover, journalDirectory, pidExists, portIsFree, windowsProcesses, assertNoBroker } = require('../tools/recover-journal-lock');
+const { recover, journalDirectory, pidExists, windowsPidExists, portIsFree, windowsProcesses, assertNoBroker } = require('../tools/recover-journal-lock');
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'broker recovery test '));
@@ -24,6 +24,60 @@ function fixture(t) {
   return { root, directory, lockPath, journalPath, original, options,
     preserved() { assert.equal(fs.readFileSync(lockPath, 'utf8'), '12345678'); assert.deepEqual(fs.readFileSync(journalPath), original); } };
 }
+
+const deniedProbe = code => () => { throw Object.assign(new Error('probe fixture'), { code }); };
+
+test('Windows PID 4836: a denied Node probe uses CIM instead of guessing the process is alive or absent', () => {
+  for (const exists of [false, true]) {
+    let queried;
+    const result = pidExists(4836, { platform: 'win32', probe: deniedProbe('EPERM'),
+      fallback: pid => { queried = pid; return exists; } });
+    assert.equal(queried, 4836);
+    assert.equal(result, exists);
+  }
+  assert.equal(pidExists(4836, { platform: 'win32', probe: deniedProbe('ESRCH'),
+    fallback: () => { throw new Error('must not query CIM'); } }), false);
+  assert.throws(() => pidExists(4836, { platform: 'linux', probe: deniedProbe('EPERM'),
+    fallback: () => false }), /4836 \(EPERM\)/);
+});
+
+test('Windows CIM PID query is hidden, read-only, exact and strictly validates its reply', () => {
+  const env = { SystemRoot: os.tmpdir() };
+  const run = (executable, args, options) => {
+    assert.equal(path.basename(executable), 'powershell.exe');
+    assert.equal(options.windowsHide, true);
+    const source = Buffer.from(args[args.indexOf('-EncodedCommand') + 1], 'base64').toString('utf16le');
+    assert.match(source, /Get-CimInstance.*-Filter "ProcessId = 4836" -ErrorAction Stop/);
+    assert.doesNotMatch(source, /Stop-Process|Terminate|taskkill/);
+    return '\ufeff{"pid":4836,"exists":false}\r\n';
+  };
+  assert.equal(windowsPidExists(4836, { run, env }), false);
+  assert.equal(windowsPidExists(4836, { run: () => '{"pid":4836,"exists":true}', env }), true);
+  for (const reply of ['', 'null', '{"pid":4837,"exists":false}', '{"pid":4836,"exists":"false"}']) {
+    assert.throws(() => windowsPidExists(4836, { run: () => reply, env }));
+  }
+  for (const pid of [0, -1, 1.5, '4836', 0x100000000]) {
+    assert.throws(() => windowsPidExists(pid, { run: () => { throw new Error('must not run'); }, env }), /Nieprawidlowy PID/);
+  }
+  assert.throws(() => windowsPidExists(4836, { env: {} }), /katalogu Windows/);
+});
+
+test('recovery archives a stale lock and preserves the journal after Node denies the PID probe', async t => {
+  const f = fixture(t);
+  const result = await recover({ ...f.options, isAlive: pid => pidExists(pid, {
+    platform: 'win32', probe: deniedProbe('EPERM'), fallback: () => false }) });
+  assert.equal(result.changed, true);
+  assert.equal(fs.existsSync(f.lockPath), false);
+  assert.deepEqual(fs.readFileSync(f.journalPath), f.original);
+  assert.equal(fs.readFileSync(path.join(result.backup, 'operations.lock'), 'utf8'), '12345678');
+});
+
+test('a failed Windows PID query preserves the lock and journal and reports both failures', async t => {
+  const f = fixture(t);
+  await assert.rejects(recover({ ...f.options, isAlive: pid => pidExists(pid, {
+    platform: 'win32', probe: deniedProbe('EPERM'), fallback: deniedProbe('EACCES') }) }), /Node: EPERM; Windows CIM: EACCES/);
+  f.preserved();
+});
 
 test('archives only a stale lock; exact journal and confirmed outcomes survive recovery and restart', async t => {
   const f = fixture(t);
@@ -265,6 +319,12 @@ test('Windows process inventory uses real CIM and sees the test Node process wit
   { skip: process.platform !== 'win32' }, async () => {
     const processes = await windowsProcesses();
     assert.ok(processes.some(row => row.ProcessId === process.pid && row.Name.toLowerCase() === 'node.exe'));
+  });
+
+test('Windows real CIM fallback recognizes this Node and a missing PID even when Node probes are denied',
+  { skip: process.platform !== 'win32' }, () => {
+    assert.equal(pidExists(process.pid, { platform: 'win32', probe: deniedProbe('EPERM') }), true);
+    assert.equal(pidExists(2147483647, { platform: 'win32', probe: deniedProbe('EPERM') }), false);
   });
 
 test('Windows cscript executes the actual VBS in a folder with spaces and keeps an empty fixture unchanged',

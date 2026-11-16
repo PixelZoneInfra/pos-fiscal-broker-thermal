@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
-const { execFile } = require('node:child_process');
+const { execFile, execFileSync } = require('node:child_process');
 const { randomUUID, createHash } = require('node:crypto');
 const appName = require('../package.json').name;
 const ROOT = path.resolve(__dirname, '..');
@@ -14,11 +14,37 @@ function journalDirectory(env = process.env) {
   return path.join(env.APPDATA, appName, 'fiscal-operations');
 }
 
-function pidExists(pid) {
-  try { process.kill(pid, 0); return true; }
+function windowsPidExists(pid, { run = execFileSync, env = process.env } = {}) {
+  if (!Number.isSafeInteger(pid) || pid < 1 || pid > 0xffffffff) throw new Error('Nieprawidlowy PID. Nie ruszono blokady.');
+  if (!env.SystemRoot || !path.isAbsolute(env.SystemRoot)) throw new Error('Brak katalogu Windows. Nie ruszono blokady.');
+  const powershell = path.join(env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const source = `
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$items = @(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop)
+if ($items.Count -gt 1 -or @($items | Where-Object { $_.ProcessId -ne ${pid} }).Count -gt 0) { throw 'Nieprawidlowy wynik PID' }
+ConvertTo-Json -InputObject @{pid=${pid}; exists=($items.Count -eq 1)} -Compress
+`;
+  const output = run(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')],
+    { windowsHide: true, encoding: 'utf8', timeout: 12000, maxBuffer: 65536 });
+  const result = JSON.parse(output.replace(/^\uFEFF/, '').trim());
+  if (result?.pid !== pid || typeof result.exists !== 'boolean') throw new Error('Nieprawidlowy wynik Windows CIM. Nie ruszono blokady.');
+  return result.exists;
+}
+
+function pidExists(pid, { probe = process.kill, platform = process.platform, fallback = windowsPidExists } = {}) {
+  try { probe(pid, 0); return true; }
   catch (error) {
     if (error.code === 'ESRCH') return false;
-    throw new Error(`Nie mozna bezpiecznie sprawdzic PID ${pid}. Nie ruszono blokady.`);
+    // A failed Node/OpenProcess probe does not establish that a Windows process
+    // exists. Confirm existence with an independent read-only Windows query.
+    if (platform === 'win32') {
+      try { return fallback(pid); }
+      catch (cause) {
+        throw new Error(`Nie mozna bezpiecznie sprawdzic PID ${pid}. Node: ${error.code || 'blad'}; Windows CIM: ${cause.code || cause.message}. Nie ruszono blokady.`);
+      }
+    }
+    throw new Error(`Nie mozna bezpiecznie sprawdzic PID ${pid} (${error.code || 'blad'}). Nie ruszono blokady.`);
   }
 }
 
@@ -211,4 +237,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { recover, journalDirectory, pidExists, portIsFree, windowsProcesses, assertNoBroker };
+module.exports = { recover, journalDirectory, pidExists, windowsPidExists, portIsFree, windowsProcesses, assertNoBroker };
