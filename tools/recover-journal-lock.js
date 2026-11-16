@@ -1,4 +1,4 @@
-// Recover only a stale PID lock. Never open the journal for writing or talk to USB.
+// Recover a stale PID lock and control descriptor. Never write the journal or talk to USB.
 const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
@@ -181,6 +181,22 @@ function saveExclusive(filename, bytes) {
   finally { fs.closeSync(fd); }
 }
 
+function controlForRecovery(root) {
+  const filename = path.join(root, 'local-results', 'broker-control.json');
+  let original;
+  try { original = readRegular(filename, 65536); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  let data;
+  try { data = JSON.parse(original.bytes.toString('utf8').replace(/^\uFEFF/, '')); }
+  catch { throw new Error('Nieprawidlowy broker-control.json. Nie ruszono plikow.'); }
+  if (data?.version !== 1 || typeof data.root !== 'string' || !path.isAbsolute(data.root) || path.resolve(data.root).toLowerCase() !== path.resolve(root).toLowerCase() ||
+    !Number.isSafeInteger(data.pid) || data.pid < 1 || data.pid > 0xffffffff || data.port !== 3030 ||
+    typeof data.instance_id !== 'string' || !data.instance_id || !/^[a-f0-9]{64}$/.test(data.token)) {
+    throw new Error('Plik sterowania nie pasuje do tego folderu brokera. Nie ruszono plikow.');
+  }
+  return { filename, original };
+}
+
 async function recover({ root = ROOT, directory = journalDirectory(),
   isAlive = pidExists, freePort = portIsFree, processes = windowsProcesses } = {}) {
   const release = panelLock(root);
@@ -189,20 +205,21 @@ async function recover({ root = ROOT, directory = journalDirectory(),
     let original;
     try { original = readRegular(lockPath, 64); }
     catch (error) {
-      if (error.code === 'ENOENT') return { changed: false, directory,
-        message: `Brak operations.lock w:\n${directory}\n\nNie ma blokady do odzyskania. Nie usunieto zadnych danych. Jesli start nadal nie dziala, sprawdz local-results\\broker-start.log.` };
-      throw error;
+      if (error.code !== 'ENOENT') throw error;
     }
-    const text = original.bytes.toString('utf8').trim();
-    const pid = Number(text);
-    if (!/^[1-9][0-9]*$/.test(text) || !Number.isSafeInteger(pid) || pid > 0xffffffff) {
+    const control = controlForRecovery(root);
+    if (!original && !control) return { changed: false, directory,
+      message: `Brak operations.lock w:\n${directory}\n\nNie ma blokady ani starego pliku sterowania do odzyskania. Nie usunieto zadnych danych. Jesli start nadal nie dziala, sprawdz local-results\\broker-start.log.` };
+    const text = original?.bytes.toString('utf8').trim();
+    const pid = original ? Number(text) : null;
+    if (original && (!/^[1-9][0-9]*$/.test(text) || !Number.isSafeInteger(pid) || pid > 0xffffffff)) {
       throw new Error('operations.lock nie zawiera prawidlowego PID. Nie zmieniono pliku; potrzebna jest weryfikacja.');
     }
     const check = async () => {
       if (!await freePort()) throw new Error('Port 3030 jest zajety. Broker lub inna aplikacja nadal dziala. Nie ruszono blokady.');
       const rows = await processes();
       assertNoBroker(rows, root);
-      return lockOwnerState(pid, original, rows, root, isAlive);
+      return original ? lockOwnerState(pid, original, rows, root, isAlive) : 'no_pid_lock';
     };
     const ownerState = await check();
     const journalPath = path.join(directory, 'operations.jsonl');
@@ -215,15 +232,25 @@ async function recover({ root = ROOT, directory = journalDirectory(),
     const backup = path.join(backupParent, new Date().toISOString().replace(/[:.]/g, '-') + '-' + randomUUID());
     fs.mkdirSync(backup, { mode: 0o700 });
     saveExclusive(path.join(backup, 'operations.jsonl'), journal.bytes);
-    saveExclusive(path.join(backup, 'recovery.json'), JSON.stringify({ version: 1, action: 'archive_stale_pid_lock', pid, ownerState,
+    // The installation and AppData can be on different drives. Copy/fsync the
+    // control snapshot first; only unlink its original after the final checks.
+    if (control) saveExclusive(path.join(backup, 'broker-control.json'), control.original.bytes);
+    saveExclusive(path.join(backup, 'recovery.json'), JSON.stringify({ version: 1,
+      action: original ? 'archive_stale_pid_lock' : 'archive_stale_control', pid, ownerState, controlArchived: Boolean(control),
       time: new Date().toISOString(), journalSha256: createHash('sha256').update(journal.bytes).digest('hex') }, null, 2) + '\n');
     // Repeat checks after creating the backup. Keep the original lock present until the final rename.
     await check();
     unchanged(journalPath, journal);
-    unchanged(lockPath, original);
-    fs.renameSync(lockPath, path.join(backup, 'operations.lock'));
-    return { changed: true, directory, backup, pid,
-      message: `Odzyskano osierocona blokade PID ${pid}.\n\nBlokada i kopia dziennika:\n${backup}\n\nOryginalny operations.jsonl zachowano bez zmian.\nTeraz kliknij Uruchom na nowo, potem Sprawdz stan.\n\nNie powtarzaj niepewnego paragonu. Operacja przerwana przez zanik zasilania moze wymagac osobnej weryfikacji. Broker nie zostal uruchomiony automatycznie.` };
+    if (original) unchanged(lockPath, original);
+    if (control) unchanged(control.filename, control.original);
+    // No broker/API is running (checked twice). Archive its stale control metadata
+    // before releasing the journal lock, so the next start cannot get stuck on it.
+    if (control) fs.unlinkSync(control.filename);
+    if (original) fs.renameSync(lockPath, path.join(backup, 'operations.lock'));
+    const recovered = original ? `Odzyskano osierocona blokade PID ${pid}.` : 'Nie bylo operations.lock.';
+    const controls = control ? '\nZarchiwizowano stary broker-control.json.' : '';
+    return { changed: true, directory, backup, pid, controlArchived: Boolean(control),
+      message: `${recovered}${controls}\n\nPliki odzyskiwania i kopia dziennika:\n${backup}\n\nOryginalny operations.jsonl zachowano bez zmian.\nTeraz kliknij Uruchom na nowo, potem Sprawdz stan.\n\nNie powtarzaj niepewnego paragonu. Operacja przerwana przez zanik zasilania moze wymagac osobnej weryfikacji. Broker nie zostal uruchomiony automatycznie.` };
   } finally { release(); }
 }
 

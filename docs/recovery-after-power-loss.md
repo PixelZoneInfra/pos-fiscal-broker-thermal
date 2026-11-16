@@ -10,7 +10,7 @@ Nie uruchamia drukarki, nie drukuje, nie zamyka transakcji fiskalnej i nie reset
 | `operations.lock` | Mały plik tekstowy z PID właściciela dziennika | Normalnie broker tworzy przy starcie i usuwa przy prawidłowym zamknięciu. Po awarii może pozostać. Przycisk archiwizuje tylko potwierdzoną osieroconą blokadę |
 | `operations.jsonl` | Trwały dziennik stanów operacji, wyników, liczników i sum kontrolnych | Zachować między sesjami i aktualizacjami. Nie usuwać, nie zerować ani nie przenosić poza aktywną ścieżkę w celu uruchomienia pustej historii |
 | `local-results/broker-start.log` | Log diagnostyczny startu | Odczytać, jeśli API nie wystartuje. Sam komunikat „kod 0” nie wskazuje przyczyny |
-| `local-results/broker-control.json` | PID/identyfikator instancji i token lokalnego sterowania | Nie publikować zawartości. Nie jest dziennikiem fiskalnym |
+| `local-results/broker-control.json` | PID/identyfikator instancji i token lokalnego sterowania | Nie publikować zawartości. Odzyskiwanie archiwizuje pozostałość po wyłączonym brokerze wraz z blokadą |
 
 W tej wersji nie ma pliku danych fiskalnych o nazwie `operation.log` ani `operations.json`.
 Sprawdź pełną nazwę i rozszerzenie w Eksploratorze. Jeśli przeniesiono plik inny niż
@@ -52,6 +52,11 @@ blokadę po awarii usuwa z aktywnego katalogu `Odzyskaj po awarii.vbs`.
    Błąd samego zapytania CIM nadal blokuje zmianę plików i pokazuje obie przyczyny.
 4. Po pozytywnym wyniku wybierz istniejące `Uruchom na nowo.vbs`, a potem `Sprawdz stan.vbs`.
    Tryb startu nadal wybiera dotychczasowy zapis profilu; odzyskiwanie go nie zmienia.
+   Po dwukrotnym sprawdzeniu portu i procesów odzyskiwanie archiwizuje również
+   stary `local-results/broker-control.json` z tego folderu. To usuwa potrzebę
+   ręcznej zmiany jego nazwy, także gdy PID przejęła usługa Windows z ukrytą
+   ścieżką procesu. Działa również wtedy, gdy `operations.lock` już nie ma.
+   `broker-profile.json` i oryginalny `operations.jsonl` pozostają na miejscu.
    Panel start/stop używa tego samego sprawdzania PID z dodatkowym odczytem CIM
    jak odzyskiwanie. Błąd odczytu starego PID z `broker-control.json` nie jest
    automatycznie uznawany za działający proces. Każda rzeczywista próba startu
