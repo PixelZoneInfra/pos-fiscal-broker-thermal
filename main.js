@@ -25,7 +25,9 @@ if (!app.requestSingleInstanceLock()) {
     // explicitly opt into persistent daily-restart profiles before any device is opened.
     const launchProfile = process.env.FISCAL_LAUNCH_PROFILE === 'managed' ? profileFromEnvironment(process.env) : null;
 
-    journal = new OperationJournal(path.join(app.getPath('userData'), 'fiscal-operations'));
+    const journalPath = path.join(app.getPath('userData'), 'fiscal-operations');
+    console.log('Dziennik fiskalny:', journalPath);
+    journal = new OperationJournal(journalPath);
     const port = new SerialPort({
       path: process.env.FISCAL_SERIAL_PORT || 'COM3', baudRate: 115200, dataBits: 8, stopBits: 1, parity: 'none', autoOpen: false,
     });

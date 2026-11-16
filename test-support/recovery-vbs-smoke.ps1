@@ -4,6 +4,7 @@ $repository = Split-Path -Parent $PSScriptRoot
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('pos-fiscal-broker recovery ' + [guid]::NewGuid())
 $previousAppData = $env:APPDATA
 $previousFixture = $env:PIXELZONE_RECOVERY_FIXTURE
+$previousRepository = $env:PIXELZONE_RECOVERY_REPOSITORY
 $keeper = $null
 try {
   New-Item -ItemType Directory -Path (Join-Path $fixture 'tools') -Force | Out-Null
@@ -11,8 +12,13 @@ try {
   Copy-Item (Join-Path $repository 'package.json') $fixture
   Copy-Item (Join-Path $repository 'operation-journal.js') $fixture
   Copy-Item (Join-Path $repository 'tools/recover-journal-lock.js') (Join-Path $fixture 'tools')
+  Copy-Item (Join-Path $repository 'tools/broker-panel.js') (Join-Path $fixture 'tools')
+  foreach ($name in @('launch-profile.js', 'start-online-production.cmd')) {
+    Copy-Item (Join-Path $repository $name) $fixture
+  }
   $env:APPDATA = Join-Path $fixture 'fake appdata'
   $env:PIXELZONE_RECOVERY_FIXTURE = $fixture
+  $env:PIXELZONE_RECOVERY_REPOSITORY = $repository
   New-Item -ItemType Directory -Path $env:APPDATA | Out-Null
   $initialize = @'
 const fs = require('node:fs');
@@ -87,12 +93,91 @@ setInterval(() => {}, 1000);
   if ($LASTEXITCODE -eq 0 -or $output -notmatch 'Proces node.exe') { throw "Expected live-process refusal: $output" }
   if (-not (Test-Path $lockPath) -or (Get-Content -Raw $lockPath) -ne $lockBefore) { throw 'Live-process test changed the lock.' }
   if ((Get-FileHash $journalPath -Algorithm SHA256).Hash -ne $before) { throw 'Live-process test changed the journal.' }
-  Write-Output 'Windows VBS/CIM recovery passed: stale lock removed (including denied Node PID probe), journal preserved, live process refused.'
+  Stop-Process -InputObject $keeper -Force
+  $keeper.WaitForExit()
+  $keeper = $null
+
+  # Full operator flow after a crash. Use the real recovery VBS, CMD, process panel,
+  # journal and HTTP controls, with a Node fixture in place of Electron/USB.
+  $output = (& cscript.exe //NoLogo (Join-Path $fixture 'Odzyskaj po awarii.vbs')) -join "`n"
+  if ($LASTEXITCODE -ne 0 -or (Test-Path $lockPath)) { throw "Pre-restart recovery failed: $output" }
+  $panelPath = Join-Path $fixture 'tools/broker-panel.js'
+  [IO.File]::WriteAllText($panelPath, $denyProbe + "`n" + [IO.File]::ReadAllText($panelPath))
+  $controlPath = Join-Path $fixture 'local-results/broker-control.json'
+  @{version=1; pid=2147483647; root=$fixture; port=3030; instance_id='stale-instance'; token=('a' * 64)} |
+    ConvertTo-Json -Compress | Set-Content -Path $controlPath -Encoding utf8
+  @{version=1; profile='online-production'} | ConvertTo-Json -Compress |
+    Set-Content -Path (Join-Path $fixture 'local-results/broker-profile.json') -Encoding utf8
+  $packagePath = Join-Path $fixture 'package.json'
+  $package = Get-Content -Raw $packagePath | ConvertFrom-Json
+  $package.main = 'fixture-main.js'
+  $package | ConvertTo-Json | Set-Content -Path $packagePath -Encoding utf8
+  $fakeElectron = Join-Path $fixture 'node_modules/electron/dist/electron.exe'
+  New-Item -ItemType Directory -Path (Split-Path -Parent $fakeElectron) -Force | Out-Null
+  Copy-Item $nodePath $fakeElectron
+  Set-Content -Path (Join-Path $fixture 'fixture-main.js') -Encoding utf8 -Value @'
+const fs = require('node:fs');
+const path = require('node:path');
+const root = __dirname;
+const repo = process.env.PIXELZONE_RECOVERY_REPOSITORY;
+const express = require(path.join(repo, 'node_modules', 'express'));
+const { OperationJournal } = require('./operation-journal');
+const { createControl } = require(path.join(repo, 'broker-control'));
+const { saveProfile, profileFromEnvironment } = require('./launch-profile');
+const journal = new OperationJournal(path.join(process.env.APPDATA, 'pos-fiscal-broker-thermal', 'fiscal-operations'));
+fs.writeFileSync(path.join(root, 'fake-broker.pid'), String(process.pid));
+const printer = { config: {}, busy: null, reservations: { active: () => null }, status: () => ({
+  api_version: 2, busy: null, journalHealthy: journal.healthy, blockedOperations: journal.blocked(),
+  serialPort: 'MOCK', environment: process.env.FISCAL_ENVIRONMENT, branch_id: Number(process.env.FISCAL_BRANCH_ID),
+  onlineOperationsEnabled: process.env.FISCAL_ONLINE_ENABLED === 'true',
+  posReservationRequired: process.env.FISCAL_REQUIRE_POS_RESERVATION === 'true', diagnosticsOnly: false,
+}) };
+let server;
+const control = createControl({ root, printer, journal, port: { isOpen: false }, transport: {},
+  onStopped: () => new Promise((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve());
+    server.closeIdleConnections?.();
+  }),
+});
+server = control.attach(express(), express()).listen(3030, '127.0.0.1', () => {
+  control.publish(3030);
+  saveProfile(root, profileFromEnvironment(process.env));
+});
+'@
+  # Invoke the exact Node commands used by the three GUI VBS buttons. Read their
+  # UTF-16 result files without displaying a blocking MsgBox on the CI desktop.
+  $panelResult = Join-Path $fixture 'panel-result.txt'
+  node $panelPath restart $panelResult
+  $panelExit = $LASTEXITCODE
+  $output = Get-Content -Raw -Encoding Unicode $panelResult
+  if ($panelExit -ne 0 -or $output -notmatch 'Uruchomiono broker') { throw "Restart after recovery failed: $output" }
+  $status = Invoke-RestMethod -Uri 'http://127.0.0.1:3030/broker/status' -TimeoutSec 5
+  if ($status.environment -ne 'production' -or $status.branch_id -ne 1 -or -not $status.onlineOperationsEnabled -or -not $status.posReservationRequired) { throw 'Restart changed the production profile.' }
+  if ($status.blockedOperations -notcontains 'interrupted-fixture') { throw 'Restart lost the unresolved operation.' }
+  node $panelPath status $panelResult
+  $panelExit = $LASTEXITCODE
+  $output = Get-Content -Raw -Encoding Unicode $panelResult
+  if ($panelExit -ne 0 -or $output -notmatch 'Broker odpowiada') { throw "Status button failed: $output" }
+  node $panelPath stop $panelResult
+  $panelExit = $LASTEXITCODE
+  $output = Get-Content -Raw -Encoding Unicode $panelResult
+  if ($panelExit -ne 0) { throw "Shutdown after recovery failed: $output" }
+  if ((Test-Path $lockPath) -or (Test-Path $controlPath)) { throw 'Shutdown left a journal lock or a control descriptor.' }
+  Write-Output 'Windows recovery/restart passed: denied Node probes, stale control PID, production profile, unresolved journal and normal shutdown.'
 }
 finally {
   if ($keeper -and -not $keeper.HasExited) { Stop-Process -InputObject $keeper -Force }
+  $fakePidPath = Join-Path $fixture 'fake-broker.pid'
+  if (Test-Path $fakePidPath) {
+    $fakePid = [int](Get-Content -Raw $fakePidPath)
+    $fakeProcess = Get-Process -Id $fakePid -ErrorAction SilentlyContinue
+    if ($fakeProcess -and $fakeProcess.Path -eq (Join-Path $fixture 'node_modules/electron/dist/electron.exe')) {
+      Stop-Process -InputObject $fakeProcess -Force
+    }
+  }
   $env:APPDATA = $previousAppData
   $env:PIXELZONE_RECOVERY_FIXTURE = $previousFixture
+  $env:PIXELZONE_RECOVERY_REPOSITORY = $previousRepository
   if (Test-Path $fixture) { Remove-Item $fixture -Recurse -Force }
 }
 exit 0
