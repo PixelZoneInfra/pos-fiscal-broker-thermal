@@ -50,6 +50,12 @@ blokadę po awarii usuwa z aktywnego katalogu `Odzyskaj po awarii.vbs`.
    Błąd samego zapytania CIM nadal blokuje zmianę plików i pokazuje obie przyczyny.
 4. Po pozytywnym wyniku wybierz istniejące `Uruchom na nowo.vbs`, a potem `Sprawdz stan.vbs`.
    Tryb startu nadal wybiera dotychczasowy zapis profilu; odzyskiwanie go nie zmienia.
+   Panel start/stop używa tego samego sprawdzania PID z dodatkowym odczytem CIM
+   jak odzyskiwanie. Błąd odczytu starego PID z `broker-control.json` nie jest
+   automatycznie uznawany za działający proces. Każda rzeczywista próba startu
+   dopisuje znacznik czasu `START` do `local-results/broker-start.log`.
+   Broker wypisuje ścieżkę dziennika przed otwarciem blokady, więc również przy
+   nieudanym starcie można porównać ją ze ścieżką odzyskiwania w AppData.
 5. Jeżeli status pokaże niejednoznaczną operację, uzgodnij ją z paragonem/drukarką
    i sprzedażą dotychczasowym procesem. Samo odzyskanie blokady nie rozstrzyga fiskalizacji.
 

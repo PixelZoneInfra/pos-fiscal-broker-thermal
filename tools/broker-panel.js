@@ -3,6 +3,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { restartLauncher } = require('../launch-profile');
+const { pidExists } = require('./recover-journal-lock');
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA = path.join(ROOT, 'local-results');
@@ -11,7 +12,7 @@ const sameRoot = root => typeof root === 'string' &&
   (process.platform === 'win32' ? path.resolve(root).toLowerCase() === ROOT.toLowerCase() : path.resolve(root) === ROOT);
 const alive = pid => {
   if (!Number.isSafeInteger(pid) || pid < 1) return false;
-  try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
+  return pidExists(pid);
 };
 
 function request(route, { method = 'GET', token, timeout = 3000 } = {}) {
@@ -124,7 +125,7 @@ exit 0
 async function stop(status) {
   const local = descriptor();
   if (!status) {
-    if (local && sameRoot(local.root) && alive(local.pid)) throw new Error('Proces brokera jeszcze działa, ale API nie odpowiada. Nie uruchomiono drugiej kopii. Sprawdź plik local-results\\broker-start.log.');
+    if (local && sameRoot(local.root) && alive(local.pid)) throw new Error(`Zapisany PID ${local.pid} nadal istnieje, ale API nie odpowiada. Nie uruchomiono drugiej kopii. Sprawdź plik local-results\\broker-start.log.`);
     return false;
   }
   if (!status.local_control) {
@@ -152,6 +153,7 @@ async function launch(launcher) {
   if (process.platform !== 'win32') throw new Error('Te przyciski są przeznaczone dla Windows.');
   if (!fs.existsSync(path.join(ROOT, launcher))) throw new Error(`Brak ${launcher}. Rozpakuj paczke do obecnego folderu brokera.`);
   fs.mkdirSync(DATA, { recursive: true });
+  fs.appendFileSync(path.join(DATA, 'broker-start.log'), `\n[${new Date().toISOString()}] START ${launcher}\n`);
   let exited = false;
   let exitCode;
   let startError;
