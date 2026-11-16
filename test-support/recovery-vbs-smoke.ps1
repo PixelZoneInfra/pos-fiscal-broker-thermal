@@ -53,6 +53,23 @@ fs.writeFileSync(path.join(process.env.APPDATA, 'pos-fiscal-broker-thermal', 'fi
 '@
   node -e $resetLock
   if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare the live-process fixture.' }
+
+  # Reproduce the production failure: process.kill(pid, 0) can throw EPERM.
+  # Only this isolated copied helper is instrumented; it must use real CIM.
+  $helper = Join-Path $fixture 'tools/recover-journal-lock.js'
+  $denyProbe = @'
+process.kill = () => {
+  require('node:fs').writeFileSync(require('node:path').join(__dirname, '..', 'pid-probe-denied'), 'EPERM');
+  throw Object.assign(new Error('denied PID probe fixture'), { code: 'EPERM' });
+};
+'@
+  [IO.File]::WriteAllText($helper, $denyProbe + "`n" + [IO.File]::ReadAllText($helper))
+  $output = (& cscript.exe //NoLogo (Join-Path $fixture 'Odzyskaj po awarii.vbs')) -join "`n"
+  if ($LASTEXITCODE -ne 0 -or (Test-Path $lockPath)) { throw "Denied Node probe did not recover through CIM: $output" }
+  if (-not (Test-Path (Join-Path $fixture 'pid-probe-denied'))) { throw 'Denied Node probe was not exercised.' }
+  if ((Get-FileHash $journalPath -Algorithm SHA256).Hash -ne $before) { throw 'CIM fallback changed the journal.' }
+  node -e $resetLock
+  if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare the live-process fixture.' }
   $lockBefore = Get-Content -Raw $lockPath
   $keeperScript = Join-Path $fixture 'simulated-broker.js'
   Set-Content -Path $keeperScript -Encoding utf8 -Value @'
@@ -70,7 +87,7 @@ setInterval(() => {}, 1000);
   if ($LASTEXITCODE -eq 0 -or $output -notmatch 'Proces node.exe') { throw "Expected live-process refusal: $output" }
   if (-not (Test-Path $lockPath) -or (Get-Content -Raw $lockPath) -ne $lockBefore) { throw 'Live-process test changed the lock.' }
   if ((Get-FileHash $journalPath -Algorithm SHA256).Hash -ne $before) { throw 'Live-process test changed the journal.' }
-  Write-Output 'Windows VBS/CIM recovery passed: stale lock removed, journal preserved, live process refused.'
+  Write-Output 'Windows VBS/CIM recovery passed: stale lock removed (including denied Node PID probe), journal preserved, live process refused.'
 }
 finally {
   if ($keeper -and -not $keeper.HasExited) { Stop-Process -InputObject $keeper -Force }

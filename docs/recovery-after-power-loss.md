@@ -44,6 +44,10 @@ blokadę po awarii usuwa z aktywnego katalogu `Odzyskaj po awarii.vbs`.
    taki PID można pominąć wyłącznie wtedy, gdy lista procesów potwierdza start
    późniejszy niż powstanie i ostatnia modyfikacja blokady (z sekundowym marginesem).
    Osobne sprawdzenie obecności brokera nadal obowiązuje, także po ponownym użyciu PID.
+   Jeśli odczyt PID przez Node (`process.kill(pid, 0)`) zwraca błąd inny niż brak
+   procesu, skrypt wykonuje dodatkowe, tylko odczytowe zapytanie Windows CIM
+   o dokładnie ten PID. Potwierdzony brak procesu pozwala kontynuować odzyskanie.
+   Błąd samego zapytania CIM nadal blokuje zmianę plików i pokazuje obie przyczyny.
 4. Po pozytywnym wyniku wybierz istniejące `Uruchom na nowo.vbs`, a potem `Sprawdz stan.vbs`.
    Tryb startu nadal wybiera dotychczasowy zapis profilu; odzyskiwanie go nie zmienia.
 5. Jeżeli status pokaże niejednoznaczną operację, uzgodnij ją z paragonem/drukarką
