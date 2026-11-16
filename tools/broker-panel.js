@@ -3,7 +3,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { restartLauncher } = require('../launch-profile');
-const { pidExists } = require('./recover-journal-lock');
+const { pidExists, windowsProcesses, assertNoBroker } = require('./recover-journal-lock');
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA = path.join(ROOT, 'local-results');
@@ -14,6 +14,21 @@ const alive = pid => {
   if (!Number.isSafeInteger(pid) || pid < 1) return false;
   return pidExists(pid);
 };
+
+async function descriptorProcessAlive(local, { isAlive = alive, platform = process.platform,
+  processes = windowsProcesses, root = ROOT } = {}) {
+  if (!isAlive(local.pid)) return false;
+  if (platform !== 'win32') return true;
+  const rows = await processes();
+  if (!Array.isArray(rows)) throw new Error('Brak pewnej listy procesow. Nie uruchomiono drugiej kopii.');
+  const owner = rows.find(row => row.ProcessId === local.pid);
+  // A live PID alone does not identify this broker. Windows may have assigned
+  // it to the print spooler or another unrelated application after a crash.
+  if (!owner || typeof owner.ExecutablePath !== 'string' || !path.win32.isAbsolute(owner.ExecutablePath)) return true;
+  try { assertNoBroker([owner], root); }
+  catch { return true; } // A possible broker or an unidentified Node stays fenced.
+  return false;
+}
 
 function request(route, { method = 'GET', token, timeout = 3000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -125,7 +140,7 @@ exit 0
 async function stop(status) {
   const local = descriptor();
   if (!status) {
-    if (local && sameRoot(local.root) && alive(local.pid)) throw new Error(`Zapisany PID ${local.pid} nadal istnieje, ale API nie odpowiada. Nie uruchomiono drugiej kopii. Sprawdź plik local-results\\broker-start.log.`);
+    if (local && sameRoot(local.root) && await descriptorProcessAlive(local)) throw new Error(`Zapisany PID ${local.pid} moze nalezec do brokera, ale API nie odpowiada. Nie uruchomiono drugiej kopii. Sprawdź plik local-results\\broker-start.log.`);
     return false;
   }
   if (!status.local_control) {
@@ -142,7 +157,7 @@ async function stop(status) {
     throw new Error(result.body.message || 'Broker odmówił zatrzymania. Pozostaje uruchomiony.');
   }
   const deadline = Date.now() + 30000;
-  while (alive(local.pid)) {
+  while (await descriptorProcessAlive(local)) {
     if (Date.now() >= deadline) throw new Error('Broker kończy pracę dłużej niż zwykle. Nie uruchomiono drugiej kopii. Poczekaj i sprawdź stan.');
     await pause(200);
   }
@@ -225,4 +240,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { describe, sameRoot, request, inspect, run };
+module.exports = { describe, sameRoot, request, inspect, run, descriptorProcessAlive };

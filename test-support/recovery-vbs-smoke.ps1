@@ -99,12 +99,16 @@ setInterval(() => {}, 1000);
 
   # Full operator flow after a crash. Use the real recovery VBS, CMD, process panel,
   # journal and HTTP controls, with a Node fixture in place of Electron/USB.
+  # Match the production incident: the old PID now belongs to an unrelated live
+  # Windows process (this PowerShell), and copying reset the lock's CreationTime.
+  Set-Content -Path $lockPath -NoNewline -Encoding ascii -Value ([string]$PID)
+  (Get-Item $lockPath).LastWriteTime = (Get-Date).AddDays(-4)
   $output = (& cscript.exe //NoLogo (Join-Path $fixture 'Odzyskaj po awarii.vbs')) -join "`n"
   if ($LASTEXITCODE -ne 0 -or (Test-Path $lockPath)) { throw "Pre-restart recovery failed: $output" }
   $panelPath = Join-Path $fixture 'tools/broker-panel.js'
   [IO.File]::WriteAllText($panelPath, $denyProbe + "`n" + [IO.File]::ReadAllText($panelPath))
   $controlPath = Join-Path $fixture 'local-results/broker-control.json'
-  @{version=1; pid=2147483647; root=$fixture; port=3030; instance_id='stale-instance'; token=('a' * 64)} |
+  @{version=1; pid=$PID; root=$fixture; port=3030; instance_id='stale-instance'; token=('a' * 64)} |
     ConvertTo-Json -Compress | Set-Content -Path $controlPath -Encoding utf8
   @{version=1; profile='online-production'} | ConvertTo-Json -Compress |
     Set-Content -Path (Join-Path $fixture 'local-results/broker-profile.json') -Encoding utf8
@@ -163,7 +167,7 @@ server = control.attach(express(), express()).listen(3030, '127.0.0.1', () => {
   $output = Get-Content -Raw -Encoding Unicode $panelResult
   if ($panelExit -ne 0) { throw "Shutdown after recovery failed: $output" }
   if ((Test-Path $lockPath) -or (Test-Path $controlPath)) { throw 'Shutdown left a journal lock or a control descriptor.' }
-  Write-Output 'Windows recovery/restart passed: denied Node probes, stale control PID, production profile, unresolved journal and normal shutdown.'
+  Write-Output 'Windows recovery/restart passed: copied lock, live unrelated reused PID, denied Node probes, production profile, unresolved journal and normal shutdown.'
 }
 finally {
   if ($keeper -and -not $keeper.HasExited) { Stop-Process -InputObject $keeper -Force }

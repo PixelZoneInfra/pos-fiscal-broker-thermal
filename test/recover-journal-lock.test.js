@@ -148,6 +148,34 @@ test('a reused unrelated PID is accepted only with a start time later than the o
   assert.equal(JSON.parse(fs.readFileSync(path.join(result.backup, 'recovery.json'), 'utf8')).ownerState, 'reused_after_lock');
 });
 
+test('copied stale lock: a new CreationTime cannot make the old saved PID look current', async t => {
+  const f = fixture(t);
+  const copiedAt = fs.statSync(f.lockPath).birthtimeMs;
+  const savedAt = new Date(copiedAt - 4 * 24 * 60 * 60 * 1000);
+  const processStartedAt = new Date(copiedAt - 90 * 60 * 1000);
+  fs.utimesSync(f.lockPath, savedAt, savedAt);
+  const result = await recover({ ...f.options, isAlive: () => true, processes: async () => [{
+    ProcessId: 12345678, Name: 'spoolsv.exe', ExecutablePath: 'C:\\Windows\\System32\\spoolsv.exe',
+    StartedAt: processStartedAt.toISOString(),
+  }] });
+  assert.equal(result.changed, true);
+  assert.equal(fs.existsSync(f.lockPath), false);
+  assert.deepEqual(fs.readFileSync(f.journalPath), f.original);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(result.backup, 'recovery.json'), 'utf8')).ownerState, 'reused_after_lock');
+});
+
+test('a copied lock is preserved when the reused PID belongs to an actual Electron broker', async t => {
+  const f = fixture(t);
+  const copiedAt = fs.statSync(f.lockPath).birthtimeMs;
+  const savedAt = new Date(copiedAt - 4 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(f.lockPath, savedAt, savedAt);
+  await assert.rejects(recover({ ...f.options, isAlive: () => true, processes: async () => [{
+    ProcessId: 12345678, Name: 'electron.exe', ExecutablePath: 'C:\\broker\\electron.exe',
+    StartedAt: new Date(copiedAt - 90 * 60 * 1000).toISOString(),
+  }] }), /Proces electron/);
+  f.preserved();
+});
+
 for (const startedAt of [undefined, 'invalid', '2000-01-01T00:00:00Z']) {
   test(`an existing lock PID without proven reuse (${startedAt}) is still refused`, async t => {
     const f = fixture(t);
