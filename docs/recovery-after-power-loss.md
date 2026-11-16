@@ -42,7 +42,9 @@ blokadę po awarii usuwa z aktywnego katalogu `Odzyskaj po awarii.vbs`.
    uruchamiający dokładnie ten przycisk, więc nie blokuje się na sobie.
    Windows może ponownie przydzielić dawny PID. Oprócz własnych procesów odzyskiwania
    taki PID można pominąć wyłącznie wtedy, gdy lista procesów potwierdza start
-   późniejszy niż powstanie i ostatnia modyfikacja blokady (z sekundowym marginesem).
+   późniejszy niż ostatni zapis PID w blokadzie (z sekundowym marginesem).
+   Data utworzenia pliku nie jest do tego używana: Windows może ją zmienić przy
+   kopiowaniu lub przywracaniu starego pliku, zachowując dawny czas modyfikacji.
    Osobne sprawdzenie obecności brokera nadal obowiązuje, także po ponownym użyciu PID.
    Jeśli odczyt PID przez Node (`process.kill(pid, 0)`) zwraca błąd inny niż brak
    procesu, skrypt wykonuje dodatkowe, tylko odczytowe zapytanie Windows CIM
@@ -56,6 +58,11 @@ blokadę po awarii usuwa z aktywnego katalogu `Odzyskaj po awarii.vbs`.
    dopisuje znacznik czasu `START` do `local-results/broker-start.log`.
    Broker wypisuje ścieżkę dziennika przed otwarciem blokady, więc również przy
    nieudanym starcie można porównać ją ze ścieżką odzyskiwania w AppData.
+   Gdy API nie działa, ale zapisany PID nadal istnieje, panel sprawdza jego
+   tożsamość przez CIM. Rozpoznany obcy proces, np. systemowy `spoolsv.exe`, nie
+   blokuje startu i nie jest zatrzymywany. Możliwy broker, brak danych procesu
+   albo błąd odczytu nadal powodują odmowę. Nie przywracaj `operations.lock`
+   z kopii jako części normalnego startu; jest znacznikiem właściciela sesji.
 5. Jeżeli status pokaże niejednoznaczną operację, uzgodnij ją z paragonem/drukarką
    i sprzedażą dotychczasowym procesem. Samo odzyskanie blokady nie rozstrzyga fiskalizacji.
 

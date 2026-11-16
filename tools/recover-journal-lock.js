@@ -152,7 +152,9 @@ function lockOwnerState(pid, original, rows, root, isAlive) {
   // old broker PID for the very Node/VBS processes doing this recovery.
   if (pid === process.pid || ownRecoveryWrapper(owner, root)) return 'reused_by_recovery';
   const startedAt = Date.parse(owner?.StartedAt);
-  const lockTime = Math.max(original.stat.birthtimeMs, original.stat.mtimeMs);
+  // Windows resets CreationTime when a file is copied/restored. LastWriteTime
+  // is the timestamp of the saved PID, so a copied stale lock stays stale.
+  const lockTime = original.stat.mtimeMs;
   // Do not infer reuse from a different executable alone. Require evidence that
   // it started after the lock existed, allowing one second for timestamp precision.
   if (Number.isFinite(startedAt) && startedAt > lockTime + 1000) return 'reused_after_lock';
