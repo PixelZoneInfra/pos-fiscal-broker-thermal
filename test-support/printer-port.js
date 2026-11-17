@@ -67,7 +67,7 @@ class PrinterPort extends EventEmitter {
     else {
       this.mutations.push(text);
       this.commandOk = !(this.rejectOn && text.includes(this.rejectOn));
-      this.lastError = this.commandOk ? 0 : 39;
+      this.lastError = this.commandOk ? 0 : (this.rejectCode || 39);
       if (this.commandOk) {
         if (text.includes('$h')) { this.openTransaction = true; this.trf = false; }
         else if (text.startsWith('\x1bP0$e')) { this.openTransaction = false; this.trf = false; }

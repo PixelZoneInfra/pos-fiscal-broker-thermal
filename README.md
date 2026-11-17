@@ -63,6 +63,7 @@ Przed operacją broker sprawdza stan sprzętu, otwartą transakcję i faktyczny 
 | `completed` | Potwierdzona operacja inna niż fiskalny paragon | Zwraca zapisany wynik |
 | `unknown` | Operacja mogła się wykonać; potrzebna weryfikacja | Zwraca brak potwierdzenia; blokuje wszystkie nowe operacje zmieniające stan |
 | `not_fiscalized` | Operator ustalił brak fiskalizacji i zamknął transakcję | Wynik końcowy; brak automatycznego ponowienia |
+| `cancelled` | Zamknięta próba niefiskalnej kopii; bez potwierdzenia wydruku | Wynik końcowy; nigdy nie wysyła ponownie `#H` |
 
 Ten sam identyfikator z inną treścią daje `409 OPERATION_CONFLICT`. Potwierdzony paragon wymaga fiskalnego TRF, braku otwartej transakcji, tej samej drukarki oraz przyrostu numeru dokumentu i licznika dobowego dokładnie o jeden. Błąd po fiskalnym zamknięciu, np. podczas stopki, daje `unknown`, z zachowanym potwierdzeniem części fiskalnej.
 
@@ -82,6 +83,7 @@ Oba endpointy paragonów przyjmują opcjonalny nagłówek `X-Operation-Id`. POS 
 | `GET /device/diagnostics` | Odczyt urządzenia, bez drukowania; respektuje wyłączność |
 | `GET /operations/:id` | Trwały zapis operacji, bez USB |
 | `POST /operations/:id/reconcile` | Dodatkowy odczyt dowodów; nie zmienia `unknown` na sukces |
+| `POST /operations/:id/close-failed-copy` | Zamyka wyłącznie nieudaną/niewysłaną próbę kopii po kontroli dowodów, bez druku |
 | `POST /operations/receipt` | Nowy kontrakt zlecenia, domyślnie wyłączony |
 | `POST /printer/reservations` | Sprawdza gotowość i rezerwuje dla ID/rodzaju polecenia, bez wydruku |
 | `GET /printer/reservations/:id` | Publiczny stan bez tokenu i bez USB |
@@ -123,6 +125,8 @@ Wartości powyżej są opisem konfiguracji, nie instrukcją włączenia produkcj
 API wymaga zgodności oddziału, środowiska i drukarki z konfiguracją lokalną. Przed wydrukiem porównuje też faktyczne ID odczytane przez USB. Przykładowa stawka VAT nie określa właściwej stawki dla produktu.
 
 ## Dziennik i odzyskiwanie
+
+**Nieudana kopia ostatniego paragonu:** pracownik używa panelu POS `/staff/fiscal-queue`: „Sprawdź stan operacji”, następnie „Zamknij nieudaną próbę kopii”. Nie edytuje ani nie usuwa `operations.jsonl`. Szczegóły, granice ponowienia i wdrożenie obu aplikacji: [odzyskiwanie kopii w POS](docs/copy-recovery.md). Procedura poniżej pozostaje dla wymagających ręcznej weryfikacji rzeczywistych sprzedaży.
 
 Dziennik `operations.jsonl` leży w `<Electron userData>/fiscal-operations`, poza repozytorium i katalogiem instalacji. Pełna ścieżka jest wypisywana przy starcie. Zawiera kolejne stany i łańcuch sum SHA-256 wykrywający przypadkowe uszkodzenie. Każdy zapis jest synchronizowany na dysk przed kontynuacją. Sumy nie zastępują kontroli dostępu do komputera. Nie usuwać ani nie skracać dziennika przy aktualizacji.
 
