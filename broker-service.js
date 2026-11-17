@@ -1,6 +1,7 @@
 const { randomUUID } = require('node:crypto');
 const { hash } = require('./operation-journal');
 const { PrinterReservations, COMMANDS, publicReservation, problem, ttl } = require('./printer-reservations');
+const { COPY_KIND, RESOLUTION_TYPE, copyRecovery, closeCopyRecord } = require('./copy-recovery');
 
 const READS = new Set(['getStatusInfo', 'getParsedStatusInfo', 'getCashDrawerState', 'getSnapshot']);
 const RECEIPTS = new Set(['printReceipt', 'printAdvancedReceipt']);
@@ -65,6 +66,7 @@ function outcome(record) {
   return {
     ...(record.result || {}), success: record.state === 'fiscal_confirmed' || record.state === 'completed',
     operation_id: record.id, state: record.state, retryable: record.state === 'not_started',
+    ...(record.kind === COPY_KIND ? { kind: record.kind, copyRecovery: copyRecovery(record), ...(record.resolution ? { resolution: record.resolution } : {}) } : {}),
     ...(record.error ? { error: record.error } : {}),
   };
 }
@@ -96,7 +98,7 @@ class BrokerService {
       reservation: publicReservation(this.reservations.active()),
       diagnosticsOnly: this.config.diagnosticsOnly === true,
       posReservationRequired: this.config.requirePosReservation === true,
-      capabilities: { reservations: true, durableOperations: true },
+      capabilities: { reservations: true, durableOperations: true, copyRecovery: true },
       onlineOperationsEnabled: this.config.onlineEnabled === true,
       branch_id: this.config.branchId || null, environment: this.config.environment || null,
       printer_unique_number: this.observedPrinterUniqueNumber };
@@ -117,7 +119,8 @@ class BrokerService {
   getOperation(id) {
     validateId(id);
     const record = this.journal.get(id);
-    return record?.kind === 'printer_reservation' ? null : record;
+    if (record?.kind === 'printer_reservation') return null;
+    return record?.kind === COPY_KIND ? { ...record, copyRecovery: copyRecovery(record) } : record;
   }
 
   assertWritable() {
@@ -246,11 +249,20 @@ class BrokerService {
         return outcome(record);
       } catch (error) {
         // A failed durable intent write never permits I/O. A failed result write is never success.
-        if (this.journal.healthy) {
-          record = this.journal.save({ ...record, state: intentSaved ? 'unknown' : 'not_started', error: error.message,
-            failureDetails: { printerError: error.printerError, hardware: error.hardware } });
+        let failed = { ...record, state: intentSaved ? 'unknown' : 'not_started', error: error.message,
+          failureDetails: { printerError: error.printerError, hardware: error.hardware } };
+        // Only an explicit rejection of this non-fiscal copy can settle automatically.
+        // Timeouts, USB faults, and every fiscal/cash operation remain fenced.
+        if (this.journal.healthy && intentSaved && name === COPY_KIND && String(error.printerError) === '115') {
+          try {
+            const evidence = this.observe(await this.raw.getSnapshot());
+            if (copyRecovery(failed, evidence).can_close) failed = closeCopyRecord(failed, evidence, 'broker', true);
+          } catch { /* No fresh proof means unknown. */ }
         }
-        throw Object.assign(error, { operation: outcome({ ...record, state: intentSaved ? 'unknown' : 'not_started', error: error.message }), statusCode: 503 });
+        if (this.journal.healthy) {
+          record = this.journal.save(failed);
+        }
+        throw Object.assign(error, { operation: outcome(failed), statusCode: 503 });
       }
     }, { token: reservationToken, operationId: id, command });
   }
@@ -258,11 +270,42 @@ class BrokerService {
   async reconcile(id) {
     validateId(id);
     return this.exclusive(`review:${id}`, async () => {
-      const record = this.getOperation(id);
-      if (!record) throw problem('NOT_FOUND', 'Nieznana operacja.', 404);
+      const record = this.journal.get(id);
+      if (!record || record.kind === 'printer_reservation') throw problem('NOT_FOUND', 'Nieznana operacja.', 404);
       // Evidence only. TRF alone cannot attribute a receipt to this operation.
       const evidence = await this.raw.getSnapshot();
-      return this.journal.save({ ...record, reviewEvidence: evidence });
+      this.journal.save({ ...record, reviewEvidence: evidence,
+        ...(record.kind === COPY_KIND && evidence.lastErrorCode ? { failureDetails: { ...record.failureDetails, observedPrinterError: evidence.lastErrorCode } } : {}) });
+      return this.getOperation(id);
+    });
+  }
+
+  async closeFailedCopy(id, options = {}) {
+    validateId(id);
+    if (typeof options.actor !== 'string' || !options.actor.trim() || options.actor.length > 100 || /[\x00-\x1f\x7f]/.test(options.actor)) {
+      throw problem('INVALID_ACTOR', 'Wymagana jest nazwa pracownika zamykającego próbę.', 400);
+    }
+    return this.exclusive(`close-copy:${id}`, async () => {
+      if (!this.journal.healthy) throw problem('REVIEW_REQUIRED', 'Dziennik brokera wymaga weryfikacji.');
+      const record = this.journal.get(id);
+      if (!record) throw problem('NOT_FOUND', 'Nieznana operacja.', 404);
+      if (record.kind !== COPY_KIND) throw problem('COPY_ONLY', 'Ten przycisk służy wyłącznie do prób kopii, nie do sprzedaży, raportów ani ruchów gotówki.');
+      if (record.state === 'cancelled' && record.resolution?.type === RESOLUTION_TYPE) {
+        return { operation: this.getOperation(id), blockedOperations: this.journal.blocked() };
+      }
+      if (!['unknown', 'not_started'].includes(record.state)) throw problem('INVALID_STATE', 'Tej próby nie można zamknąć.');
+      if (!options.expected_updated_at || options.expected_updated_at !== record.updatedAt) {
+        throw problem('STALE_REVIEW', 'Dane operacji zmieniły się. Sprawdź ponownie jej stan.');
+      }
+      const printerNumber = record.before?.identity?.uniqueNumber || this.journal.get(record.reservationId)?.printerUniqueNumber;
+      if (!printerNumber || options.printer_unique_number !== printerNumber) {
+        throw problem('DEVICE_MISMATCH', 'Próba kopii dotyczy innej drukarki albo brakuje jej zapisanego numeru.');
+      }
+      const evidence = record.state === 'unknown' ? this.observe(await this.raw.getSnapshot()) : null;
+      const proof = copyRecovery(record, evidence);
+      if (!proof.can_close) throw problem('COPY_REVIEW_REQUIRED', proof.reason);
+      this.journal.save(closeCopyRecord(record, evidence, options.actor.trim(), false, printerNumber));
+      return { operation: this.getOperation(id), blockedOperations: this.journal.blocked() };
     });
   }
 }

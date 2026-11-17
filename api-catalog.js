@@ -22,6 +22,7 @@ const API_CASES = [
   { id: 'online-receipt', method: 'POST', path: '/operations/receipt', effect: 'fiscal', body: true },
   { id: 'operation', method: 'GET', path: '/operations/:id', effect: 'read' },
   { id: 'reconcile', method: 'POST', path: '/operations/:id/reconcile', effect: 'evidence' },
+  { id: 'close-failed-copy', method: 'POST', path: '/operations/:id/close-failed-copy', effect: 'evidence', body: true },
   { id: 'reservation-create', method: 'POST', path: '/printer/reservations', effect: 'reservation', body: true },
   { id: 'reservation', method: 'GET', path: '/printer/reservations/:id', effect: 'read' },
   { id: 'reservation-renew', method: 'POST', path: '/printer/reservations/:id/renew', effect: 'reservation' },

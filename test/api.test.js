@@ -61,3 +61,25 @@ test('new HTTP contract is off by default, validates assignment, and returns the
   assert.equal(port.writes.length, count);
   assert.equal((await request('/device/diagnostics')).body.identity.uniqueNumber, port.uniqueNumber);
 });
+
+test('HTTP copy recovery checks fresh evidence, records the employee, and never exposes sale cancellation', async t => {
+  const { request, raw, journal, port } = await api(t);
+  const before = await raw.getSnapshot();
+  journal.save({ id: 'pos:old-copy', kind: 'reprintLastReceipt', state: 'unknown', before });
+  journal.save({ id: 'pos:real-sale', kind: 'printAdvancedReceipt', state: 'unknown', before });
+  assert.equal((await request('/broker/status')).body.capabilities.copyRecovery, true);
+  assert.equal((await request('/operations/pos:old-copy')).body.copyRecovery.can_close, false);
+  const checked = await request('/operations/pos:old-copy/reconcile', {});
+  assert.equal(checked.body.copyRecovery.can_close, true);
+  const data = { actor: 'Kasjer Banino', expected_updated_at: checked.body.updatedAt, printer_unique_number: port.uniqueNumber };
+  assert.equal((await request('/operations/pos:old-copy/close-failed-copy', {})).status, 400);
+  assert.equal((await request('/operations/pos:old-copy/close-failed-copy', { ...data, expected_updated_at: 'old' })).status, 409);
+  assert.equal((await request('/operations/pos:real-sale/close-failed-copy', data)).body.code, 'COPY_ONLY');
+  const closed = await request('/operations/pos:old-copy/close-failed-copy', data);
+  assert.equal(closed.status, 200);
+  assert.equal(closed.body.operation.state, 'cancelled');
+  assert.equal(closed.body.operation.resolution.actor, 'Kasjer Banino');
+  assert.deepEqual(closed.body.blockedOperations, ['pos:real-sale']);
+  assert.equal(port.mutations.length, 0);
+  assert.equal((await request('/cash-drawer/open', {})).status, 409);
+});

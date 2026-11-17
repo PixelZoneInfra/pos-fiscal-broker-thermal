@@ -259,6 +259,10 @@ apiApp.post('/operations/:id/reconcile', operationRoute(async (req, res) => {
     res.json(await printer.reconcile(req.params.id));
 }));
 
+apiApp.post('/operations/:id/close-failed-copy', operationRoute(async (req, res) => {
+    res.json(await printer.closeFailedCopy(req.params.id, req.body || {}));
+}));
+
 return apiApp;
 }
 
