@@ -27,6 +27,94 @@ function fixture(t) {
 
 const deniedProbe = code => () => { throw Object.assign(new Error('probe fixture'), { code }); };
 
+function controlFixture(f, overrides = {}) {
+  const filename = path.join(f.root, 'local-results', 'broker-control.json');
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  const bytes = Buffer.from(JSON.stringify({ version: 1, pid: 12345678, root: f.root, port: 3030,
+    instance_id: 'old-instance', token: 'a'.repeat(64), ...overrides }));
+  fs.writeFileSync(filename, bytes);
+  return { filename, bytes };
+}
+
+test('recovery archives stale control metadata together with the lock, including an unrelated protected process', async t => {
+  const f = fixture(t);
+  const control = controlFixture(f);
+  const profilePath = path.join(f.root, 'local-results', 'broker-profile.json');
+  const profile = '{"version":1,"profile":"online-production"}';
+  fs.writeFileSync(profilePath, profile);
+  const copiedAt = fs.statSync(f.lockPath).birthtimeMs;
+  const savedAt = new Date(copiedAt - 4 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(f.lockPath, savedAt, savedAt);
+  const result = await recover({ ...f.options, isAlive: () => true, processes: async () => [{
+    ProcessId: 12345678, Name: 'spoolsv.exe', ExecutablePath: null,
+    StartedAt: new Date(copiedAt - 90 * 60 * 1000).toISOString(),
+  }] });
+  assert.equal(result.controlArchived, true);
+  assert.equal(fs.existsSync(control.filename), false);
+  assert.equal(fs.existsSync(f.lockPath), false);
+  assert.deepEqual(fs.readFileSync(path.join(result.backup, 'broker-control.json')), control.bytes);
+  assert.deepEqual(fs.readFileSync(f.journalPath), f.original);
+  assert.equal(fs.readFileSync(profilePath, 'utf8'), profile);
+});
+
+test('a stale control file can be recovered when the PID lock was already removed', async t => {
+  const f = fixture(t);
+  const control = controlFixture(f);
+  fs.unlinkSync(f.lockPath);
+  const result = await recover(f.options);
+  assert.equal(result.changed, true);
+  assert.equal(result.controlArchived, true);
+  assert.equal(result.pid, null);
+  assert.equal(fs.existsSync(control.filename), false);
+  assert.deepEqual(fs.readFileSync(path.join(result.backup, 'broker-control.json')), control.bytes);
+  assert.deepEqual(fs.readFileSync(f.journalPath), f.original);
+  assert.equal((await recover(f.options)).changed, false);
+});
+
+for (const deps of [{ freePort: async () => false }, { processes: async () => [{ ProcessId: 97, Name: 'electron.exe' }] }]) {
+  test(`active broker preserves a control-only recovery: ${Object.keys(deps)}`, async t => {
+    const f = fixture(t);
+    const control = controlFixture(f);
+    fs.unlinkSync(f.lockPath);
+    await assert.rejects(recover({ ...f.options, ...deps }));
+    assert.deepEqual(fs.readFileSync(control.filename), control.bytes);
+    assert.deepEqual(fs.readFileSync(f.journalPath), f.original);
+  });
+}
+
+test('changed control metadata is preserved and the PID lock is not released', async t => {
+  const f = fixture(t);
+  const control = controlFixture(f);
+  let checks = 0;
+  await assert.rejects(recover({ ...f.options, processes: async () => {
+    if (++checks === 2) controlFixture(f, { instance_id: 'different-instance' });
+    return [];
+  } }), /zmienily sie/);
+  assert.notDeepEqual(fs.readFileSync(control.filename), control.bytes);
+  f.preserved();
+});
+
+test('malformed or foreign control metadata cannot be moved during recovery', async t => {
+  const f = fixture(t);
+  const control = controlFixture(f, { root: path.join(f.root, 'different-installation') });
+  await assert.rejects(recover(f.options), /nie pasuje/);
+  f.preserved();
+  fs.writeFileSync(control.filename, '{broken');
+  await assert.rejects(recover(f.options), /Nieprawidlowy broker-control/);
+  assert.equal(fs.readFileSync(control.filename, 'utf8'), '{broken');
+  f.preserved();
+});
+
+test('control-only recovery still requires the original journal', async t => {
+  const f = fixture(t);
+  const control = controlFixture(f);
+  fs.unlinkSync(f.lockPath);
+  fs.unlinkSync(f.journalPath);
+  await assert.rejects(recover(f.options), /Brak prawidlowego operations.jsonl/);
+  assert.deepEqual(fs.readFileSync(control.filename), control.bytes);
+  assert.equal(fs.existsSync(f.journalPath), false);
+});
+
 test('Windows PID 4836: a denied Node probe uses CIM instead of guessing the process is alive or absent', () => {
   for (const exists of [false, true]) {
     let queried;

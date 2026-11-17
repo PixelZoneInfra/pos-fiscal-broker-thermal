@@ -103,13 +103,19 @@ setInterval(() => {}, 1000);
   # Windows process (this PowerShell), and copying reset the lock's CreationTime.
   Set-Content -Path $lockPath -NoNewline -Encoding ascii -Value ([string]$PID)
   (Get-Item $lockPath).LastWriteTime = (Get-Date).AddDays(-4)
-  $output = (& cscript.exe //NoLogo (Join-Path $fixture 'Odzyskaj po awarii.vbs')) -join "`n"
-  if ($LASTEXITCODE -ne 0 -or (Test-Path $lockPath)) { throw "Pre-restart recovery failed: $output" }
-  $panelPath = Join-Path $fixture 'tools/broker-panel.js'
-  [IO.File]::WriteAllText($panelPath, $denyProbe + "`n" + [IO.File]::ReadAllText($panelPath))
   $controlPath = Join-Path $fixture 'local-results/broker-control.json'
   @{version=1; pid=$PID; root=$fixture; port=3030; instance_id='stale-instance'; token=('a' * 64)} |
     ConvertTo-Json -Compress | Set-Content -Path $controlPath -Encoding utf8
+  # Standard-user CIM can expose a service's PID/name/start but hide its path.
+  # Preserve the real CIM query, masking just that field for the unrelated PID.
+  $helperText = [IO.File]::ReadAllText($helper)
+  if (-not $helperText.Contains('resolve(rows);')) { throw 'Missing CIM visibility fixture point.' }
+  $helperText = $helperText.Replace('resolve(rows);', "resolve(rows.map(row => row.ProcessId === $PID ? { ...row, ExecutablePath: null } : row));")
+  [IO.File]::WriteAllText($helper, $helperText)
+  $output = (& cscript.exe //NoLogo (Join-Path $fixture 'Odzyskaj po awarii.vbs')) -join "`n"
+  if ($LASTEXITCODE -ne 0 -or (Test-Path $lockPath) -or (Test-Path $controlPath)) { throw "Pre-restart recovery failed: $output" }
+  $panelPath = Join-Path $fixture 'tools/broker-panel.js'
+  [IO.File]::WriteAllText($panelPath, $denyProbe + "`n" + [IO.File]::ReadAllText($panelPath))
   @{version=1; profile='online-production'} | ConvertTo-Json -Compress |
     Set-Content -Path (Join-Path $fixture 'local-results/broker-profile.json') -Encoding utf8
   $packagePath = Join-Path $fixture 'package.json'
@@ -167,7 +173,7 @@ server = control.attach(express(), express()).listen(3030, '127.0.0.1', () => {
   $output = Get-Content -Raw -Encoding Unicode $panelResult
   if ($panelExit -ne 0) { throw "Shutdown after recovery failed: $output" }
   if ((Test-Path $lockPath) -or (Test-Path $controlPath)) { throw 'Shutdown left a journal lock or a control descriptor.' }
-  Write-Output 'Windows recovery/restart passed: copied lock, live unrelated reused PID, denied Node probes, production profile, unresolved journal and normal shutdown.'
+  Write-Output 'Windows recovery/restart passed: copied lock, stale control removed, hidden service path, production profile, unresolved journal and normal shutdown.'
 }
 finally {
   if ($keeper -and -not $keeper.HasExited) { Stop-Process -InputObject $keeper -Force }
